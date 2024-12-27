@@ -4,8 +4,6 @@ formatters:
     (): "logconfig.CustomJsonFormatter"
     format: "%(created)s %(levelname)s %(message)s"
     rename_fields: {"created": "ts", "message": "msg", "levelname": "level"}
-    defaults:
-      pathname: "%(pathname)s"
 handlers:
   main:
     class: logging.StreamHandler

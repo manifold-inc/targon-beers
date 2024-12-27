@@ -13,7 +13,8 @@ import pymysql
 import json
 import traceback
 from asyncio import Lock
-from ..logconfig.logconfig import setupLogging
+
+from logconfig import setupLogging
 
 
 pymysql.install_as_MySQLdb()

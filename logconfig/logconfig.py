@@ -9,7 +9,7 @@ class CustomJsonFormatter(JsonFormatter):
         return super().format(record)
 
 def setupLogging():
-    with open("logging.yaml", "rt") as file:
+    with open("logconfig.yaml", "rt") as file:
         config = yaml.safe_load(file.read())
     logging.config.dictConfig(config)
     logger = logging.getLogger("main")

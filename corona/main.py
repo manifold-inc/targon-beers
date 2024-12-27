@@ -3,7 +3,7 @@ import os
 import time
 import traceback
 
-from ..logconfig.logconfig import setupLogging
+from logconfig import setupLogging
 
 pymysql.install_as_MySQLdb()
 

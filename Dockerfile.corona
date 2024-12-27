@@ -13,14 +13,14 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 
 # Set the working directory
-WORKDIR /app/corona
+WORKDIR /app
 
 # Copy the requirements file and install dependencies
 COPY ./corona/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your Python script and start.sh
-COPY ./logconfig /app/logconfig
+COPY ./logconfig ./
 COPY ./corona/*.py ./
 COPY ./corona/start.sh ./
 

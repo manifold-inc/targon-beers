@@ -1,6 +1,6 @@
 import pymysql
 import os
-from ..logconfig.logconfig import setupLogging
+from logconfig import setupLogging
 import traceback
 
 

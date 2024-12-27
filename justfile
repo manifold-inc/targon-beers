@@ -13,6 +13,12 @@ venv:
 build opts="":
   docker compose build {{opts}}
 
+dev opts="":
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d {{opts}}
+
+down opts="":
+  docker compose down {{opts}}
+
 prod image version='latest':
   export VERSION={{version}} && docker compose pull
   export VERSION={{version}} && docker rollout {{image}}
