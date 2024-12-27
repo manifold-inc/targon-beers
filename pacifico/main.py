@@ -163,7 +163,7 @@ async def ingest_organics(request: Request):
     if err:
         logger.error(
             {
-                "service": "targon-jugo",
+                "service": "targon-pacifico",
                 "endpoint": "ingest_organics",
                 "request_id": request_id,
                 "error": str(err),
@@ -180,7 +180,7 @@ async def ingest_organics(request: Request):
         if not signed_by or not is_authorized_hotkey(cursor, signed_by):
             logger.error(
                 {
-                    "service": "targon-jugo",
+                    "service": "targon-pacifico",
                     "endpoint": "ingest_organics",
                     "request_id": request_id,
                     "error": str("Unauthorized hotkey"),
@@ -244,7 +244,7 @@ async def ingest_organics(request: Request):
         error_traceback = traceback.format_exc()
         logger.error(
             {
-                "service": "targon-jugo",
+                "service": "targon-pacifico",
                 "endpoint": "ingest",
                 "request_id": request_id,
                 "error": str(e),
@@ -287,7 +287,7 @@ async def ingest(request: Request):
     if err:
         logger.error(
             {
-                "service": "targon-jugo",
+                "service": "targon-pacifico",
                 "endpoint": "ingest",
                 "request_id": request_id,
                 "error": str(err),
@@ -304,7 +304,7 @@ async def ingest(request: Request):
         if not signed_by or not is_authorized_hotkey(cursor, signed_by):
             logger.error(
                 {
-                    "service": "targon-jugo",
+                    "service": "targon-pacifico",
                     "endpoint": "ingest",
                     "request_id": request_id,
                     "error": str("Unauthorized hotkey"),
@@ -393,7 +393,7 @@ async def ingest(request: Request):
         error_traceback = traceback.format_exc()
         logger.error(
             {
-                "service": "targon-jugo",
+                "service": "targon-pacifico",
                 "endpoint": "ingest",
                 "request_id": request_id,
                 "error": str(e),
@@ -439,7 +439,7 @@ async def exgest(request: Request):
             if err:
                 logger.error(
                     {
-                        "service": "targon-jugo",
+                        "service": "targon-pacifico",
                         "endpoint": "exgest",
                         "request_id": request_id,
                         "error": str(err),
@@ -513,7 +513,7 @@ async def exgest(request: Request):
                     error_traceback = traceback.format_exc()
                     logger.error(
                         {
-                            "service": "targon-jugo",
+                            "service": "targon-pacifico",
                             "endpoint": "exgest",
                             "request_id": request_id,
                             "error": str(e),
@@ -539,7 +539,7 @@ async def exgest(request: Request):
     except json.JSONDecodeError as e:
         logger.error(
             {
-                "service": "targon-jugo",
+                "service": "targon-pacifico",
                 "endpoint": "exgest",
                 "request_id": request_id,
                 "error": str(e),

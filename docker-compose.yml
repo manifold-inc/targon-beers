@@ -3,10 +3,10 @@ services:
     image: manifoldlabs/targon-pacifico
     labels:
       - traefik.enable=true
-      - traefik.http.routers.jugo-new.rule=Host(`jugo.targon.com`)
-      - traefik.http.routers.jugo.tls=true
-      - traefik.http.routers.jugo.tls.certresolver=letsencrypt
-      - traefik.http.services.jugo.loadbalancer.server.port=80
+      - traefik.http.routers.pacifico.rule=Host(`jugo.targon.com`) || Host(`pacifico.targon.com`)
+      - traefik.http.routers.pacifico.tls=true
+      - traefik.http.routers.pacifico.tls.certresolver=letsencrypt
+      - traefik.http.services.pacifico.loadbalancer.server.port=80
       - vector.enable=true
     build:
       context: .
