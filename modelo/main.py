@@ -7,10 +7,10 @@ import traceback
 pymysql.install_as_MySQLdb()
 
 db = pymysql.connect(
-    host=os.getenv("DATABASE_HOST"),
-    user=os.getenv("DATABASE_USERNAME"),
-    passwd=os.getenv("DATABASE_PASSWORD"),
-    db=os.getenv("DATABASE_NAME"),
+    host=os.getenv("HUB_DATABASE_HOST"),
+    user=os.getenv("HUB_DATABASE_USERNAME"),
+    passwd=os.getenv("HUB_DATABASE_PASSWORD"),
+    db=os.getenv("HUB_DATABASE_NAME"),
     autocommit=True,
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
