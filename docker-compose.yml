@@ -3,7 +3,7 @@ services:
     image: manifoldlabs/targon-pacifico
     labels:
       - traefik.enable=true
-      - traefik.http.routers.pacifico.rule=Host(`jugo.targon.com`) || Host(`pacifico.targon.com`)
+      - traefik.http.routers.pacifico.rule=Host(`jugo.targon.com`) || Host(`beers.targon.com`)
       - traefik.http.routers.pacifico.tls=true
       - traefik.http.routers.pacifico.tls.certresolver=letsencrypt
       - traefik.http.services.pacifico.loadbalancer.server.port=80
