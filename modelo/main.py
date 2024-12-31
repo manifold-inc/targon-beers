@@ -27,12 +27,15 @@ def calculate_and_insert_daily_stats():
             SELECT 
                 model_name,
                 SUM(response_tokens) AS total_tokens,
-                DATE(created_at) AS date
+                DATE(created_at) AS date,
+                AVG(response_tokens / (total_time / 1000)) as avg_tps
             FROM 
                 request
             WHERE 
                 created_at >= CURDATE() - INTERVAL 1 Day
                 AND created_at < CURDATE()
+                AND total_time > 0
+                AND response_tokens > 0
             GROUP BY 
                 model_name,
                 DATE(created_at)
@@ -47,8 +50,8 @@ def calculate_and_insert_daily_stats():
             # Insert the calculated stats into the historical stats table
             insert_query = """
             INSERT INTO daily_model_token_counts
-            (created_at, model_name, total_tokens)
-            VALUES (%s, %s, %s)
+            (created_at, model_name, total_tokens, avg_tps)
+            VALUES (%s, %s, %s, %s)
             """
             for result in results:
                 cursor.execute(insert_query, result)
