@@ -63,8 +63,36 @@ def calculate_and_insert_daily_stats():
         return False
 
 
+def disable_expired_models():
+    logger.info("Starting to check for expired models")
+    try:
+        with db.cursor() as cursor:
+            # Find models that have been enabled for a week without an active subscription
+            query = """
+            UPDATE model
+            SET enabled = FALSE
+            WHERE enabled = TRUE
+            AND enabled_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            AND NOT EXISTS (
+                SELECT 1 
+                FROM model_subscription 
+                WHERE model_subscription.model_id = model.id 
+                AND model_subscription.status = 'active'
+            )
+            """
+            cursor.execute(query)
+            affected_rows = cursor.rowcount
+            logger.info(f"Disabled {affected_rows} expired models")
+            return True
+
+    except Exception as e:
+        logger.error({"error": e, "stacktrace": traceback.format_exc()})
+        return False
+
+
 if __name__ == "__main__":
     try:
         calculate_and_insert_daily_stats()
+        disable_expired_models()
     finally:
         db.close()
