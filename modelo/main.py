@@ -383,6 +383,7 @@ def disable_expired_models():
             SET enabled = FALSE
             WHERE enabled = TRUE
             AND enabled_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+            AND force_enabled = FALSE
             AND NOT EXISTS (
                 SELECT 1 
                 FROM model_subscription 
