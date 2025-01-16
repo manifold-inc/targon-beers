@@ -267,10 +267,6 @@ def fetch_and_populate_models(limit: int = 20) -> bool:
     logger.info("Starting to fetch and populate models")
     try:
         with db.cursor() as cursor:
-            # Get existing model names
-            cursor.execute("SELECT name FROM model")
-            existing_models = {row[0] for row in cursor.fetchall()}
-            
             # Track models to insert
             models_to_insert = []
             next_cursor = None
@@ -285,17 +281,16 @@ def fetch_and_populate_models(limit: int = 20) -> bool:
                         break
                         
                     model_id = model_data["id"]
-                    if model_id not in existing_models:
-                        processed_data = validate_and_prepare_model(model_data)
-                        if processed_data:
-                            models_to_insert.append(processed_data)
-                            logger.info(f"Found new valid model: {model_id} ({len(models_to_insert)}/{limit})")
+                    processed_data = validate_and_prepare_model(model_data)
+                    if processed_data:
+                        models_to_insert.append(processed_data)
+                        logger.info(f"Found new valid model: {model_id} ({len(models_to_insert)}/{limit})")
                 
                 # Stop if we've reached the limit or there are no more pages
                 if len(models_to_insert) >= limit or not next_cursor:
                     break
             
-            # Insert valid models
+            # Insert valid models, updating if they already exist
             if models_to_insert:
                 insert_query = """
                 INSERT INTO model (
@@ -307,9 +302,16 @@ def fetch_and_populate_models(limit: int = 20) -> bool:
                     %(miners)s, %(success)s, %(failure)s, %(cpt)s, %(enabled)s,
                     %(required_gpus)s, %(custom_build)s, NOW(), NULL
                 )
+                ON DUPLICATE KEY UPDATE
+                    description = VALUES(description),
+                    modality = VALUES(modality),
+                    supported_endpoints = VALUES(supported_endpoints),
+                    cpt = VALUES(cpt),
+                    required_gpus = VALUES(required_gpus),
+                    custom_build = VALUES(custom_build)
                 """
                 cursor.executemany(insert_query, models_to_insert)
-                logger.info(f"Added {len(models_to_insert)} new models to database")
+                logger.info(f"Processed {len(models_to_insert)} models (inserted or updated)")
             else:
                 logger.info("No new valid models found")
                 
