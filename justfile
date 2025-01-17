@@ -48,7 +48,7 @@ k8s-deploy:
   envsubst < ./k8s-deployment/deployments.yaml | kubectl apply -f -
 
 k8s-delete:
-  kubectl delete ./k8s-deployment/deployments.yaml
+  kubectl delete -f ./k8s-deployment/deployments.yaml
 
 k8s-down:
   kind delete cluster
