@@ -4,6 +4,8 @@ CHECK  := "\\xE2\\x9C\\x94"
 
 set shell := ["bash", "-uc"]
 
+set dotenv-required
+
 default:
   just -l
 
@@ -26,3 +28,27 @@ prod image version='latest':
 
 rollback image:
   export VERSION=$(docker image ls --filter before=manifoldlabs/targon-{{image}}:latest --filter reference=manifoldlabs/targon-hub-{{image}} --format "{{{{.Tag}}" | head -n 1) && docker rollout {{image}}
+
+k8s-up: k8s-create k8s-build k8s-load k8s-deploy
+
+k8s-create:
+  kind create cluster --config ./k8s-deployment/local-kind-config.yaml
+
+k8s-build:
+  docker buildx build -t manifoldlabs/targon-pacifico:dev -f Dockerfile.pacifico . --platform linux/amd64,linux/arm64
+  docker buildx build -t manifoldlabs/targon-modelo:dev -f Dockerfile.modelo . --platform linux/amd64,linux/arm64
+  docker buildx build -t manifoldlabs/targon-corona:dev -f Dockerfile.corona . --platform linux/amd64,linux/arm64
+
+k8s-load:
+  kind load docker-image manifoldlabs/targon-pacifico:dev \
+    manifoldlabs/targon-modelo:dev \
+    manifoldlabs/targon-corona:dev
+
+k8s-deploy:
+  envsubst < ./k8s-deployment/deployments.yaml | kubectl apply -f -
+
+k8s-delete:
+  kubectl delete -f ./k8s-deployment/deployments.yaml
+
+k8s-down:
+  kind delete cluster
