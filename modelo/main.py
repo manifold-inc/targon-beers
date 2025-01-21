@@ -27,8 +27,6 @@ db = pymysql.connect(
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
 
-logger = setupLogging()
-
 def get_model_description(organization: str, model_name: str) -> str:
     try:
         response = requests.get(
@@ -64,7 +62,7 @@ def get_model_description(organization: str, model_name: str) -> str:
             return " ".join(paragraph_lines)
             
     except Exception as e:
-        logger.error(f"Error fetching README: {str(e)}")
+        print(f"Error fetching README: {str(e)}")
         
     return "No description provided"
 
@@ -73,173 +71,111 @@ def validate_and_prepare_model(model_data: Dict[str, Any]) -> Optional[Dict[str,
     try:
         model_id = model_data["id"]
         organization, model_name = model_id.split("/")
-        
+
         if not model_name or not organization:
             logger.error(f"Invalid model ID format: {model_id}")
             return None
-        
-        # Basic validation
+
+        # Check if model is private/gated
         if model_data.get("private", False) or model_data.get("gated", False):
             logger.error(f"Model {model_id} is private or gated")
             return None
-        
-        # Get description from README for better content
-        description = get_model_description(organization, model_name)
-        
-        # Special handling for GGUF models
-        is_gguf = "GGUF" in model_id or model_id.endswith(".gguf")
-        if is_gguf:
-            logger.info(f"Model {model_id} is a GGUF model, marking as custom build")
-            return {
-                "name": model_id,
-                "miners": 0,
-                "success": 0,
-                "failure": 0,
-                "cpt": 0,
-                "enabled": False,
-                "required_gpus": 0,
-                "modality": "text-generation",
-                "description": description,
-                "supported_endpoints": json.dumps(["COMPLETION"]),
-                "custom_build": True
-            }
-            
-        # Try to determine library and capabilities
-        library_name = model_data.get("library_name", "").lower()
-        pipeline_tag = model_data.get("pipeline_tag", "text-generation")
-        config = model_data.get("config", {})
-        
-        # If no explicit library but has config, assume transformers
-        if not library_name and config:
-            if "tokenizer_config" in config or "model_type" in config:
-                library_name = "transformers"
-                
-        # If still no library but has typical model files, assume transformers
-        if not library_name:
-            if any(key in model_data for key in ["safetensors", "pytorch_model.bin", "model.safetensors"]):
-                library_name = "transformers"
-        
+
+        # Check modality
+        pipeline_tag = model_data.get("pipeline_tag")
+        if not pipeline_tag or pipeline_tag not in MODALITIES:
+            logger.error(f"Model {model_id} has unsupported modality: {pipeline_tag}")
+            return None
+
+        # Check library
+        library_name = model_data.get("library_name")
         if not library_name:
             logger.error(f"Model {model_id} does not have any library metadata")
             return None
-            
+
         if library_name not in SUPPORTED_LIBRARIES:
-            logger.error(f"Library {library_name} for model {model_id} is not supported")
-            return None
-        
-        if pipeline_tag not in MODALITIES and not any(tag in model_data.get("tags", []) for tag in ["text-generation", "text-generation-inference"]):
-            logger.error(f"Model {model_id} has unsupported modality: {pipeline_tag}")
-            return None
-        
-        # Determine supported endpoints - more lenient check
-        tokenizer_config = config.get("tokenizer_config", {})
-        has_chat = (
-            tokenizer_config.get("chat_template") or
-            "chat" in model_id.lower() or
-            any(tag in model_data.get("tags", []) for tag in ["chat", "conversational"])
-        )
-        supported_endpoints = ["COMPLETION", "CHAT"] if has_chat else ["COMPLETION"]
-        
-        # Check for custom code requirements
-        needs_custom_build = False
-        if library_name == "transformers":
-            tags = model_data.get("tags", [])
-            has_custom_code = 'custom_code' in tags
-            
-            if config:
-                auto_map = config.get('auto_map', {})
-                has_auto_map = (
-                    isinstance(auto_map, dict) and
-                    all(not str(path).endswith('.py') for path in auto_map.values())
-                )
-                
-                transformers_info = model_data.get('transformersInfo', {})
-                has_auto_model = bool(transformers_info.get('auto_model'))
-                
-                if has_custom_code or (not has_auto_map and not has_auto_model):
-                    needs_custom_build = True
-            else:
-                # If no config but has model files, we can probably handle it
-                if not any(key in model_data for key in ["safetensors", "pytorch_model.bin", "model.safetensors"]):
-                    needs_custom_build = True
-        
-        if needs_custom_build:
-            return {
-                "name": model_id,
-                "miners": 0,
-                "success": 0,
-                "failure": 0,
-                "cpt": 0,
-                "enabled": False,
-                "required_gpus": 0,
-                "modality": "text-generation",
-                "description": description,
-                "supported_endpoints": json.dumps(supported_endpoints), 
-                "custom_build": True
-            }
-        
-        # Get GPU requirements for non-custom builds
-        try:
-            gpu_response = requests.post(
-                os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT"),
-                json={"model": model_id, "library_name": library_name},
-                headers={"Content-Type": "application/json"},
-                timeout=10
+            logger.error(
+                f"Library {library_name} for model {model_id} is not supported"
             )
-            
-            if not gpu_response.ok:
-                if gpu_response.status_code == 500:
-                    # If GPU estimation fails, mark as custom build
-                    return {
-                        "name": model_id,
-                        "miners": 0,
-                        "success": 0,
-                        "failure": 0,
-                        "cpt": 0,
-                        "enabled": False,
-                        "required_gpus": 0,
-                        "modality": "text-generation",
-                        "description": description,
-                        "supported_endpoints": json.dumps(supported_endpoints), 
-                        "custom_build": True
-                    }
-                logger.error(f"Failed to get GPU requirements for {model_id}: {gpu_response.status_code}")
-                return None
-                
-            gpu_data = gpu_response.json()
-            required_gpus = gpu_data.get('required_gpus', 1)  # Default to 1 if not specified
-            
-            if required_gpus > MAX_GPUS:
-                logger.error(f"Model {model_id} requires {required_gpus} GPUs (max is {MAX_GPUS})")
-                return None
-            
-        except Exception as e:
-            logger.error(f"GPU estimation error for {model_id}: {str(e)}")
             return None
-        
-        processed_data = {
+
+        # Check if model requires trust_remote_code from config
+        if model_data.get("config", {}).get("trust_remote_code", False):
+            needs_custom_build = True
+            required_gpus = 0
+            logger.info(
+                f"Model {model_id} needs custom build (from config) - preparing for insertion"
+            )
+        else:
+            # Try VRAM estimation
+            try:
+                gpu_response = requests.post(
+                    os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT"),
+                    json={"model": model_id, "library_name": library_name},
+                    headers={"Content-Type": "application/json"},
+                    timeout=10,
+                )
+
+                logger.info(
+                    f"GPU estimation response for {model_id}: Status={gpu_response.status_code}, Response={gpu_response.text}"
+                )
+
+                if gpu_response.ok:
+                    required_gpus = gpu_response.json().get("required_gpus")
+                    if required_gpus and required_gpus <= MAX_GPUS:
+                        needs_custom_build = False
+                        logger.info(f"Model {model_id} requires {required_gpus} GPUs")
+                    else:
+                        logger.error(
+                            f"Model {model_id} has invalid GPU requirement: {required_gpus}"
+                        )
+                        return None
+                elif gpu_response.status_code == 500:
+                    # Only treat 500 errors as indicators for custom build
+                    needs_custom_build = True
+                    required_gpus = 0
+                    logger.info(
+                        f"Model {model_id} needs custom build (from estimation error) - preparing for insertion"
+                    )
+                else:
+                    logger.error(f"Model {model_id} failed GPU estimation with unexpected status {gpu_response.status_code}: {gpu_response.text}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"GPU estimation error for {model_id}: {str(e)}")
+                return None
+
+        # Get model info
+        description = get_model_description(organization, model_name)
+        has_chat_template = (
+            model_data.get("config", {})
+            .get("tokenizer_config", {})
+            .get("chat_template")
+            is not None
+        )
+        supported_endpoints = (
+            ["COMPLETION", "CHAT"] if has_chat_template else ["COMPLETION"]
+        )
+
+        return {
             "name": model_id,
-            "miners": 0,
-            "success": 0,
-            "failure": 0,
-            "cpt": required_gpus,
+            "modality": pipeline_tag,
+            "required_gpus": 0 if needs_custom_build else required_gpus,
+            "supported_endpoints": json.dumps(supported_endpoints),
+            "cpt": 0 if needs_custom_build else required_gpus,
             "enabled": False,
-            "required_gpus": required_gpus,
-            "modality": "text-generation",
+            "custom_build": needs_custom_build,
             "description": description,
-            "supported_endpoints": json.dumps(supported_endpoints), 
-            "custom_build": False
         }
-        
-        logger.info(f"Model {model_id} is valid and ready for insertion (custom_build: False)")
-        return processed_data
 
     except Exception as e:
         logger.error(f"Error validating {model_id}: {str(e)}")
         return None
 
 
-def fetch_models_page(cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def fetch_models_page(
+    cursor: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     url = "https://huggingface.co/api/models"
     params = {
         "filter": "text-generation",
@@ -247,75 +183,98 @@ def fetch_models_page(cursor: Optional[str] = None) -> Tuple[List[Dict[str, Any]
         "direction": -1,
         "limit": 100,
         "cursor": cursor,
-        "full": True
+        "full": True,
+        "config": True,
     }
 
     response = requests.get(url, params=params)
     if not response.ok:
-        logger.error(f"Failed to fetch models: {response.status_code}")
+        logger.error(
+            f"Failed to fetch models: {response.status_code} - {response.text}"
+        )
         return [], None
-    
+
     next_url = response.links.get("next", {}).get("url")
     next_cursor = None
     if next_url:
         next_cursor = parse_qs(urlparse(next_url).query)["cursor"][0]
 
-    return response.json(), next_cursor
+    models = response.json()
+    logger.info(f"Fetched {len(models)} models, next cursor: {next_cursor}")
+    return models, next_cursor
 
 
 def fetch_and_populate_models(limit: int = 20) -> bool:
-    logger.info("Starting to fetch and populate models")
+    logger.info(f"Starting to fetch and populate models (target: {limit} new models)")
     try:
         with db.cursor() as cursor:
-            # Track models to insert
-            models_to_insert = []
-            next_cursor = None
-            
-            while len(models_to_insert) < limit:
+            new_models = 0
+            current_cursor = None
+            processed_models = set()
+
+            while new_models < limit:
                 # Fetch next page of models
-                models_page, next_cursor = fetch_models_page(next_cursor)
-                
+                models_page, next_cursor = fetch_models_page(current_cursor)
+
+                if not models_page:
+                    logger.warning(
+                        f"No more models available from HuggingFace. Found {new_models} new models before exhausting the list."
+                    )
+                    break
+
+                logger.info(
+                    f"Processing page of {len(models_page)} models (current progress: {new_models}/{limit} new models)"
+                )
+
                 # Process models from this page
                 for model_data in models_page:
-                    if len(models_to_insert) >= limit:
+                    if new_models >= limit:
                         break
-                        
-                    model_id = model_data["id"]
+
                     processed_data = validate_and_prepare_model(model_data)
-                    if processed_data:
-                        models_to_insert.append(processed_data)
-                        logger.info(f"Found new valid model: {model_id} ({len(models_to_insert)}/{limit})")
-                
-                # Stop if we've reached the limit or there are no more pages
-                if len(models_to_insert) >= limit or not next_cursor:
+                    if not processed_data:
+                        continue
+
+                    model_name = processed_data["name"]
+                    if model_name in processed_models:
+                        logger.debug(f"Skipping already processed model: {model_name}")
+                        continue
+
+                    processed_models.add(model_name)
+
+                    # Insert model - will silently skip if exists
+                    insert_query = """
+                    INSERT IGNORE INTO model (
+                        name, description, modality, supported_endpoints,
+                        cpt, enabled, required_gpus, custom_build, created_at
+                    ) VALUES (
+                        %(name)s, %(description)s, %(modality)s, %(supported_endpoints)s,
+                        %(cpt)s, %(enabled)s, %(required_gpus)s, %(custom_build)s, NOW()
+                    )
+                    """
+                    cursor.execute(insert_query, processed_data)
+                    if cursor.rowcount == 1:  # Only increment if we actually inserted
+                        new_models += 1
+                        logger.info(
+                            f"New model ({new_models}/{limit}): {model_name} (custom_build: {processed_data['custom_build']})"
+                        )
+                    else:
+                        logger.debug(f"Skipping existing model: {model_name}")
+
+                if new_models >= limit:
+                    logger.info(f"Successfully found {limit} new models")
                     break
-            
-            # Insert valid models, updating if they already exist
-            if models_to_insert:
-                insert_query = """
-                INSERT INTO model (
-                    name, description, modality, supported_endpoints,
-                    miners, success, failure, cpt, enabled,
-                    required_gpus, custom_build, created_at, enabled_date
-                ) VALUES (
-                    %(name)s, %(description)s, %(modality)s, %(supported_endpoints)s,
-                    %(miners)s, %(success)s, %(failure)s, %(cpt)s, %(enabled)s,
-                    %(required_gpus)s, %(custom_build)s, NOW(), NULL
-                )
-                ON DUPLICATE KEY UPDATE
-                    description = VALUES(description),
-                    modality = VALUES(modality),
-                    supported_endpoints = VALUES(supported_endpoints),
-                    cpt = VALUES(cpt),
-                    required_gpus = VALUES(required_gpus),
-                    custom_build = VALUES(custom_build)
-                """
-                cursor.executemany(insert_query, models_to_insert)
-                logger.info(f"Processed {len(models_to_insert)} models (inserted or updated)")
-            else:
-                logger.info("No new valid models found")
-                
-        return True
+
+                if not next_cursor:
+                    logger.warning(
+                        f"No more pages available. Found {new_models} new models before exhausting all pages."
+                    )
+                    break
+
+                current_cursor = next_cursor
+
+            logger.info(f"Finished processing models. Added {new_models} new models")
+            return new_models == limit
 
     except Exception as e:
         logger.error({"error": e, "stacktrace": traceback.format_exc()})
@@ -367,7 +326,9 @@ def calculate_and_insert_daily_stats():
                 )
                 logger.info(f"Debug - Inserting: {ordered_values}")
                 cursor.execute(insert_query, ordered_values)
-                logger.info(f"Inserted daily stats for {ordered_values[1]} on {ordered_values[0]}")
+                logger.info(
+                    f"Inserted daily stats for {ordered_values[1]} on {ordered_values[0]}"
+                )
             return True
 
     except Exception as e:
