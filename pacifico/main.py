@@ -114,6 +114,7 @@ current_bucket = CurrentBucket()
 
 # Cache: Store the data for 20 minutes (1200 seconds)
 cache = TTLCache(maxsize=2, ttl=1200)
+image_cache = TTLCache(maxsize=2, ttl=1200)
 
 targon_hub_db = pymysql.connect(
     host=os.getenv("HUB_DATABASE_HOST"),
@@ -552,6 +553,7 @@ async def exgest(request: Request):
             status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
         )
 
+@app.post("/organics/images")
 
 @app.get("/ping")
 def ping():
