@@ -410,6 +410,10 @@ async def ingest(request: Request):
     finally:
         cursor.close()
 
+# Synthetic Image Endpoint
+@app.post("/images")
+async def ingest_images(request: Request):
+    logger.info("Start POST /images")
 
 # Exegestor endpoint
 @app.post("/organics")
@@ -552,8 +556,6 @@ async def exgest(request: Request):
         raise HTTPException(
             status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
         )
-
-@app.post("/organics/images")
 
 @app.get("/ping")
 def ping():
