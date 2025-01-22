@@ -414,6 +414,24 @@ async def ingest(request: Request):
 @app.post("/images")
 async def ingest_images(request: Request):
     logger.info("Start POST /images")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
+    body = await request.body()
+    json_data = await request.json()
+
+    timestamp = request.headers.get("Epistula-Timestamp")
+    uuid = request.headers.get("Epistula-Uuid")
+    signed_by = request.headers.get("Epistula-Signed-By")
+    signature = request.headers.get("Epistula-Request-Signature")
+
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
 
 # Exegestor endpoint
 @app.post("/organics")
