@@ -433,6 +433,100 @@ async def ingest_images(request: Request):
         now=now,
     )
 
+    if err:
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "ingest_images",
+                "request_id": request_id,
+                "error": str(err),
+                "traceback": "Signature verification failed",
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(status_code=400, detail=str(err))
+    
+    cursor = targon_stats_db.cursor()
+    try:
+        payload = IngestPayload(**json_data)
+        if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+            logger.error(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "ingest_images",
+                    "request_id": request_id,
+                    "error": str("Unauthorized hotkey"),
+                    "traceback": f"Unauthorized hotkey: {signed_by}",
+                    "type": "error_log",
+                }
+            )
+            raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
+        cursor.executemany(
+            """
+            INSERT INTO image_response (r_nanoid, hotkey, coldkey, uid, image, verified, error, cause) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (
+                    md.r_nanoid, 
+                    md.hotkey, 
+                    md.coldkey, 
+                    md.uid, 
+                    md.image,
+                    md.stats.verified, 
+                    md.stats.error, 
+                    md.stats.cause
+                ) 
+                for md in payload.responses
+            ],
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO validator_image_request (r_nanoid, block, messages, version, hotkey, timestamp, model, seed, temperature, guidance_scale, size, steps) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                payload.request.r_nanoid, 
+                payload.request.block, 
+                json.dumps(
+                    payload.request.request.messages or payload.request.request.prompt
+                ), 
+                payload.request.version, 
+                payload.request.hotkey,
+                payload.request.timestamp, 
+                payload.request.request.model, 
+                payload.request.request.seed, 
+                payload.request.request.temperature, 
+                payload.request.request.guidance_scale, 
+                payload.request.request.size, 
+                payload.request.request.steps
+            )
+        )
+
+        targon_stats_db.commit()
+        return "", 200
+
+    except Exception as e:
+        targon_stats_db.rollback()
+        error_traceback = traceback.format_exc()
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "ingest_images",
+                "request_id": request_id,
+                "error": str(e),
+                "traceback": error_traceback,
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"[{request_id}] Internal Server Error: Could not insert responses/requests. {str(e)}",
+        )
+    finally:
+        cursor.close()
+
 # Exegestor endpoint
 @app.post("/organics")
 async def exgest(request: Request):
