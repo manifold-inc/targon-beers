@@ -463,7 +463,7 @@ async def ingest_images(request: Request):
             raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
         cursor.executemany(
             """
-            INSERT INTO image_response (r_nanoid, hotkey, coldkey, uid, image, verified, error, cause) 
+            INSERT INTO miner_image_response (r_nanoid, hotkey, coldkey, uid, verified, error, timestamp, cause, image) 
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
@@ -472,10 +472,11 @@ async def ingest_images(request: Request):
                     md.hotkey, 
                     md.coldkey, 
                     md.uid, 
-                    md.image,
                     md.stats.verified, 
                     md.stats.error, 
-                    md.stats.cause
+                    md.stats.timestamp, 
+                    md.stats.cause, 
+                    md.image
                 ) 
                 for md in payload.responses
             ],
