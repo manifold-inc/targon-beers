@@ -606,10 +606,9 @@ async def exgest_images(request: Request):
                 bucket_id = "b_" + generate(alphabet=alphabet, size=14)
                 try:
                     # Generate bucket ID for this model
-                    # TODO: update SQL query to fetch organic image requests
                     cursor.execute(
                         """
-                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name
+                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, model_name
                         FROM request
                         WHERE scored = false 
                         ORDER BY id DESC
