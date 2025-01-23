@@ -111,9 +111,11 @@ def is_authorized_hotkey(cursor, signed_by: str) -> bool:
 
 # Global variables for bucket management
 current_bucket = CurrentBucket()
+current_image_bucket = CurrentBucket()
 
 # Cache: Store the data for 20 minutes (1200 seconds)
 cache = TTLCache(maxsize=2, ttl=1200)
+image_cache = TTLCache(maxsize=2, ttl=1200)
 
 targon_hub_db = pymysql.connect(
     host=os.getenv("HUB_DATABASE_HOST"),
@@ -592,9 +594,8 @@ async def exgest_images(request: Request):
                 raise HTTPException(status_code=400, detail=str(err))
 
         async with cache_lock:  # Acquire the lock - other threads must wait here
-            # TODO: Implement cache bucket for images
-            cached_buckets = cache.get("buckets")
-            bucket_id = cache.get("bucket_id")
+            cached_buckets = image_cache.get("buckets")
+            bucket_id = image_cache.get("bucket_id")
 
             if cached_buckets is None or bucket_id is None:
                 model_buckets = {}
