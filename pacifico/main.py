@@ -551,6 +551,148 @@ async def exgest(request: Request):
         raise HTTPException(
             status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
         )
+    
+@app.post("/organics/images")
+async def exgest_images(request: Request):
+    logger.info("Start POST /organics/images")
+    request_id = generate(size=6)
+    try:
+        json_data = await request.json()
+        now = round(time.time() * 1000)
+        body = await request.body()
+
+        # Extract signature information from headers
+        timestamp = request.headers.get("Epistula-Timestamp")
+        uuid = request.headers.get("Epistula-Uuid")
+        signed_by = request.headers.get("Epistula-Signed-By")
+        signature = request.headers.get("Epistula-Request-Signature")
+
+        # Verify the signature using the new epistula protocol
+        if not DEBUG:
+            err = verify_signature(
+                signature=signature,
+                body=body,
+                timestamp=timestamp,
+                uuid=uuid,
+                signed_by=signed_by,
+                now=now,
+            )
+
+            if err:
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "exgest_images",
+                        "request_id": request_id,
+                        "error": str(err),
+                        "traceback": "Signature verification failed",
+                        "type": "error_log",
+                    }
+                )
+                raise HTTPException(status_code=400, detail=str(err))
+
+        async with cache_lock:  # Acquire the lock - other threads must wait here
+            # TODO: Implement cache bucket for images
+            cached_buckets = cache.get("buckets")
+            bucket_id = cache.get("bucket_id")
+
+            if cached_buckets is None or bucket_id is None:
+                model_buckets = {}
+                cursor = targon_hub_db.cursor(DictCursor)
+                alphabet = (
+                    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                )
+                bucket_id = "b_" + generate(alphabet=alphabet, size=14)
+                try:
+                    # Generate bucket ID for this model
+                    # TODO: update SQL query to fetch organic image requests
+                    cursor.execute(
+                        """
+                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name
+                        FROM request
+                        WHERE scored = false 
+                        ORDER BY id DESC
+                        LIMIT 100
+                        """,
+                    )
+
+                    records = cursor.fetchall()
+
+                    # If we have records, mark them as scored
+                    if records:
+                        record_ids = [record["id"] for record in records]
+                        placeholders = ", ".join(["%s"] * len(record_ids))
+                        logger.info("Updating all records")
+                        cursor.execute(
+                            f"""
+                            UPDATE request 
+                            SET scored = true 
+                            WHERE id IN ({placeholders})
+                            """,
+                            record_ids,
+                        )
+
+                    # Convert records to ResponseRecord objects
+                    models = {}
+                    response_records = []
+                    for record in records:
+                        record["response"] = json.loads(record["response"])
+                        record["request"] = json.loads(record["request"])
+
+                        response_records.append(record)
+                        model = record.get("model_name")
+                        if models.get(record.get("model_name")) == None:
+                            models[model] = []
+                        models[model].append(record)
+
+                    for model in models.keys():
+                        model_buckets[model] = models[model]
+
+                    # Safely update cache - no other thread can interfere
+                    cache["buckets"] = model_buckets
+                    cache["bucket_id"] = bucket_id
+                    cached_buckets = model_buckets
+                except Exception as e:
+                    error_traceback = traceback.format_exc()
+                    logger.error(
+                        {
+                            "service": "targon-pacifico",
+                            "endpoint": "exgest_images",
+                            "request_id": request_id,
+                            "error": str(e),
+                            "traceback": error_traceback,
+                            "type": "error_log",
+                        }
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Internal Server Error: Could not fetch responses. {str(e)}",
+                    )
+                finally:
+                    cursor.close()
+
+        return {
+            "bucket_id": bucket_id,
+            "organics": {
+                model: cached_buckets[model]
+                for model in json_data
+                if model in cached_buckets
+            },
+        }
+    except json.JSONDecodeError as e:
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "exgest_images",
+                "request_id": request_id,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(
+            status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
+        )
 
 
 @app.get("/ping")
