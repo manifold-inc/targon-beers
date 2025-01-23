@@ -649,8 +649,8 @@ async def exgest_images(request: Request):
                         model_buckets[model] = models[model]
 
                     # Safely update cache - no other thread can interfere
-                    cache["buckets"] = model_buckets
-                    cache["bucket_id"] = bucket_id
+                    image_cache["buckets"] = model_buckets
+                    image_cache["bucket_id"] = bucket_id
                     cached_buckets = model_buckets
                 except Exception as e:
                     error_traceback = traceback.format_exc()
