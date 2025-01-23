@@ -563,35 +563,35 @@ async def exgest_images(request: Request):
         now = round(time.time() * 1000)
         body = await request.body()
 
-        # Extract signature information from headers
-        timestamp = request.headers.get("Epistula-Timestamp")
-        uuid = request.headers.get("Epistula-Uuid")
-        signed_by = request.headers.get("Epistula-Signed-By")
-        signature = request.headers.get("Epistula-Request-Signature")
+        # # Extract signature information from headers
+        # timestamp = request.headers.get("Epistula-Timestamp")
+        # uuid = request.headers.get("Epistula-Uuid")
+        # signed_by = request.headers.get("Epistula-Signed-By")
+        # signature = request.headers.get("Epistula-Request-Signature")
 
-        # Verify the signature using the new epistula protocol
-        if not DEBUG:
-            err = verify_signature(
-                signature=signature,
-                body=body,
-                timestamp=timestamp,
-                uuid=uuid,
-                signed_by=signed_by,
-                now=now,
-            )
+        # # Verify the signature using the new epistula protocol
+        # if not DEBUG:
+        #     err = verify_signature(
+        #         signature=signature,
+        #         body=body,
+        #         timestamp=timestamp,
+        #         uuid=uuid,
+        #         signed_by=signed_by,
+        #         now=now,
+        #     )
 
-            if err:
-                logger.error(
-                    {
-                        "service": "targon-pacifico",
-                        "endpoint": "exgest_images",
-                        "request_id": request_id,
-                        "error": str(err),
-                        "traceback": "Signature verification failed",
-                        "type": "error_log",
-                    }
-                )
-                raise HTTPException(status_code=400, detail=str(err))
+        #     if err:
+        #         logger.error(
+        #             {
+        #                 "service": "targon-pacifico",
+        #                 "endpoint": "exgest_images",
+        #                 "request_id": request_id,
+        #                 "error": str(err),
+        #                 "traceback": "Signature verification failed",
+        #                 "type": "error_log",
+        #             }
+        #         )
+        #         raise HTTPException(status_code=400, detail=str(err))
 
         async with cache_lock:  # Acquire the lock - other threads must wait here
             cached_buckets = image_cache.get("buckets")
@@ -608,7 +608,7 @@ async def exgest_images(request: Request):
                     # Generate bucket ID for this model
                     cursor.execute(
                         """
-                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, model_name
+                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success
                         FROM request
                         WHERE scored = false 
                         ORDER BY id DESC
@@ -671,6 +671,7 @@ async def exgest_images(request: Request):
                 finally:
                     cursor.close()
 
+        print({"bucket_id": bucket_id, "organics": {model: cached_buckets[model] for model in json_data if model in cached_buckets}})
         return {
             "bucket_id": bucket_id,
             "organics": {

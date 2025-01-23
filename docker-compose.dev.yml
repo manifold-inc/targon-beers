@@ -10,16 +10,15 @@ services:
   traefik:
     image: traefik:v2.3
     ports:
-      - 80:80
+      - 8080:80
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.toml:/etc/traefik/traefik.toml
       - traefik-public-certificates:/certificates
-  
+
   vector:
     profiles:
       - "norun"
-
 volumes:
   traefik-public-certificates:
