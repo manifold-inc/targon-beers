@@ -8,13 +8,13 @@ from dotenv import load_dotenv
 import os
 
 from pymysql.cursors import DictCursor
-#from epistula import verify_signature
+from epistula import verify_signature
 import pymysql
 import json
 import traceback
 from asyncio import Lock
 
-#from logconfig import setupLogging
+from logconfig import setupLogging
 
 
 pymysql.install_as_MySQLdb()
@@ -27,7 +27,7 @@ if not DEBUG:
     config = {"docs_url": None, "redoc_url": None}
 app = FastAPI(**config)  # type: ignore
 
-#logger = setupLogging()
+logger = setupLogging()
 
 
 class Stats(BaseModel):
@@ -115,7 +115,8 @@ current_image_bucket = CurrentBucket()
 
 # Cache: Store the data for 20 minutes (1200 seconds)
 cache = TTLCache(maxsize=2, ttl=1200)
-image_cache = TTLCache(maxsize=2, ttl=180)
+# Offset the cache for images by 30 minutes (1800 seconds)
+image_cache = TTLCache(maxsize=2, ttl=1800)
 
 targon_hub_db = pymysql.connect(
     host=os.getenv("HUB_DATABASE_HOST"),
@@ -557,42 +558,42 @@ async def exgest(request: Request):
     
 @app.post("/organics/images")
 async def exgest_images(request: Request):
-    print("Start POST /organics/images")
+    logger.info("Start POST /organics/images")
     request_id = generate(size=6)
     try:
         json_data = await request.json()
         now = round(time.time() * 1000)
         body = await request.body()
 
-        # # Extract signature information from headers
-        # timestamp = request.headers.get("Epistula-Timestamp")
-        # uuid = request.headers.get("Epistula-Uuid")
-        # signed_by = request.headers.get("Epistula-Signed-By")
-        # signature = request.headers.get("Epistula-Request-Signature")
+        # Extract signature information from headers
+        timestamp = request.headers.get("Epistula-Timestamp")
+        uuid = request.headers.get("Epistula-Uuid")
+        signed_by = request.headers.get("Epistula-Signed-By")
+        signature = request.headers.get("Epistula-Request-Signature")
 
-        # # Verify the signature using the new epistula protocol
-        # if not DEBUG:
-        #     err = verify_signature(
-        #         signature=signature,
-        #         body=body,
-        #         timestamp=timestamp,
-        #         uuid=uuid,
-        #         signed_by=signed_by,
-        #         now=now,
-        #     )
+        # Verify the signature using the new epistula protocol
+        if not DEBUG:
+            err = verify_signature(
+                signature=signature,
+                body=body,
+                timestamp=timestamp,
+                uuid=uuid,
+                signed_by=signed_by,
+                now=now,
+            )
 
-        #     if err:
-        #         logger.error(
-        #             {
-        #                 "service": "targon-pacifico",
-        #                 "endpoint": "exgest_images",
-        #                 "request_id": request_id,
-        #                 "error": str(err),
-        #                 "traceback": "Signature verification failed",
-        #                 "type": "error_log",
-        #             }
-        #         )
-        #         raise HTTPException(status_code=400, detail=str(err))
+            if err:
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "exgest_images",
+                        "request_id": request_id,
+                        "error": str(err),
+                        "traceback": "Signature verification failed",
+                        "type": "error_log",
+                    }
+                )
+                raise HTTPException(status_code=400, detail=str(err))
 
         async with cache_lock:  # Acquire the lock - other threads must wait here
             cached_buckets = image_cache.get("buckets")
@@ -614,7 +615,7 @@ async def exgest_images(request: Request):
                         WHERE scored = false
                         AND endpoint = 'IMAGE' 
                         ORDER BY id DESC
-                        LIMIT 9
+                        LIMIT 20
                         """,
                     )
 
@@ -624,7 +625,7 @@ async def exgest_images(request: Request):
                     if records:
                         record_ids = [record["id"] for record in records]
                         placeholders = ", ".join(["%s"] * len(record_ids))
-                        print("Updating all records")
+                        logger.info("Updating all records")
                         cursor.execute(
                             f"""
                             UPDATE request 
@@ -656,7 +657,7 @@ async def exgest_images(request: Request):
                     cached_buckets = model_buckets
                 except Exception as e:
                     error_traceback = traceback.format_exc()
-                    print(
+                    logger.error(
                         {
                             "service": "targon-pacifico",
                             "endpoint": "exgest_images",
@@ -673,7 +674,6 @@ async def exgest_images(request: Request):
                 finally:
                     cursor.close()
 
-        print({"bucket_id": bucket_id, "organics": {model: cached_buckets[model] for model in json_data if model in cached_buckets}})
         return {
             "bucket_id": bucket_id,
             "organics": {
@@ -683,7 +683,7 @@ async def exgest_images(request: Request):
             },
         }
     except json.JSONDecodeError as e:
-        print(
+        logger.error(
             {
                 "service": "targon-pacifico",
                 "endpoint": "exgest_images",
