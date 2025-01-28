@@ -30,6 +30,12 @@ app = FastAPI(**config)  # type: ignore
 logger = setupLogging()
 
 
+class UsageStats(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
 class Stats(BaseModel):
     time_to_first_token: float
     time_for_all_tokens: float
@@ -39,6 +45,7 @@ class Stats(BaseModel):
     verified: bool
     error: Optional[str] = None
     cause: Optional[str] = None
+    usage: UsageStats
 
 
 # Define the MinerResponse model
@@ -318,8 +325,8 @@ async def ingest(request: Request):
             )
         cursor.executemany(
             """
-            INSERT INTO miner_response (r_nanoid, hotkey, coldkey, uid, verified, time_to_first_token, time_for_all_tokens, total_time, tokens, tps, error, cause) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO miner_response (r_nanoid, hotkey, coldkey, uid, verified, time_to_first_token, time_for_all_tokens, total_time, tokens, tps, error, cause, usage) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
                 (
@@ -335,6 +342,7 @@ async def ingest(request: Request):
                     md.stats.tps,
                     md.stats.error,
                     md.stats.cause,
+                    json.dumps(md.stats.usage)
                 )
                 for md in payload.responses
             ],
