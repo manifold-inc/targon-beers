@@ -11,6 +11,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pacifico
+      platforms:
+        - linux/amd64
+        - linux/arm64
     env_file: .env
 
   modelo:
@@ -20,6 +23,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.modelo
+      platforms:
+        - linux/amd64
+        - linux/arm64
     env_file: .env
 
   corona:
@@ -29,6 +35,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.corona
+      platforms:
+        - linux/amd64
+        - linux/arm64
     env_file: .env
 
   traefik:
