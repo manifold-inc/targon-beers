@@ -4,19 +4,13 @@ import json
 from logconfig import setupLogging
 import traceback
 from urllib.parse import parse_qs, urlparse
-
 import pymysql
 import requests
 
-pymysql.install_as_MySQLdb()
 # Initialize logging
 logger = setupLogging()
 
-# Constants
-SUPPORTED_LIBRARIES = ["transformers", "timm"]
-MODALITIES = ["text-generation"]
-MAX_GPUS = 8
-
+pymysql.install_as_MySQLdb()
 # Database connection
 db = pymysql.connect(
     host=os.getenv("HUB_DATABASE_HOST"),
@@ -26,152 +20,6 @@ db = pymysql.connect(
     autocommit=True,
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
-
-def get_model_description(organization: str, model_name: str) -> str:
-    try:
-        response = requests.get(
-            f"https://huggingface.co/{organization}/{model_name}/raw/main/README.md",
-            timeout=10
-        )
-        
-        if not response.ok:
-            return "No description provided"
-            
-        content = response.text
-        # Skip YAML frontmatter if it exists
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                content = parts[2]
-        
-        # Split into lines and find first real paragraph
-        lines = content.split("\n")
-        paragraph_lines: List[str] = []
-        
-        for line in lines:
-            line = line.strip()
-            # Skip empty lines, headings, and common markdown elements
-            if (not line or 
-                line.startswith(("#", "---", "|", "```", "<!--", "- "))):
-                if paragraph_lines:
-                    break  # We found a paragraph, stop at next special element
-                continue
-            paragraph_lines.append(line)
-            
-        if paragraph_lines:
-            return " ".join(paragraph_lines)
-            
-    except Exception as e:
-        print(f"Error fetching README: {str(e)}")
-        
-    return "No description provided"
-
-
-def validate_and_prepare_model(model_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    try:
-        model_id = model_data["id"]
-        organization, model_name = model_id.split("/")
-
-        if not model_name or not organization:
-            logger.error(f"Invalid model ID format: {model_id}")
-            return None
-
-        # Check if model is private/gated
-        if model_data.get("private", False) or model_data.get("gated", False):
-            logger.error(f"Model {model_id} is private or gated")
-            return None
-
-        # Check modality
-        pipeline_tag = model_data.get("pipeline_tag")
-        if not pipeline_tag or pipeline_tag not in MODALITIES:
-            logger.error(f"Model {model_id} has unsupported modality: {pipeline_tag}")
-            return None
-
-        # Check library
-        library_name = model_data.get("library_name")
-        if not library_name:
-            logger.error(f"Model {model_id} does not have any library metadata")
-            return None
-
-        if library_name not in SUPPORTED_LIBRARIES:
-            logger.error(
-                f"Library {library_name} for model {model_id} is not supported"
-            )
-            return None
-
-        # Check if model requires trust_remote_code from config
-        if model_data.get("config", {}).get("trust_remote_code", False):
-            needs_custom_build = True
-            required_gpus = 0
-            logger.info(
-                f"Model {model_id} needs custom build (from config) - preparing for insertion"
-            )
-        else:
-            # Try VRAM estimation
-            try:
-                gpu_response = requests.post(
-                    os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT"),
-                    json={"model": model_id, "library_name": library_name},
-                    headers={"Content-Type": "application/json"},
-                    timeout=10,
-                )
-
-                logger.info(
-                    f"GPU estimation response for {model_id}: Status={gpu_response.status_code}, Response={gpu_response.text}"
-                )
-
-                if gpu_response.ok:
-                    required_gpus = gpu_response.json().get("required_gpus")
-                    if required_gpus and required_gpus <= MAX_GPUS:
-                        needs_custom_build = False
-                        logger.info(f"Model {model_id} requires {required_gpus} GPUs")
-                    else:
-                        logger.error(
-                            f"Model {model_id} has invalid GPU requirement: {required_gpus}"
-                        )
-                        return None
-                elif gpu_response.status_code == 500:
-                    # Only treat 500 errors as indicators for custom build
-                    needs_custom_build = True
-                    required_gpus = 0
-                    logger.info(
-                        f"Model {model_id} needs custom build (from estimation error) - preparing for insertion"
-                    )
-                else:
-                    logger.error(f"Model {model_id} failed GPU estimation with unexpected status {gpu_response.status_code}: {gpu_response.text}")
-                    return None
-
-            except Exception as e:
-                logger.error(f"GPU estimation error for {model_id}: {str(e)}")
-                return None
-
-        # Get model info
-        description = get_model_description(organization, model_name)
-        has_chat_template = (
-            model_data.get("config", {})
-            .get("tokenizer_config", {})
-            .get("chat_template")
-            is not None
-        )
-        supported_endpoints = (
-            ["COMPLETION", "CHAT"] if has_chat_template else ["COMPLETION"]
-        )
-
-        return {
-            "name": model_id,
-            "modality": pipeline_tag,
-            "required_gpus": 0 if needs_custom_build else required_gpus,
-            "supported_endpoints": json.dumps(supported_endpoints),
-            "cpt": 0 if needs_custom_build else required_gpus,
-            "enabled": False,
-            "custom_build": needs_custom_build,
-            "description": description,
-        }
-
-    except Exception as e:
-        logger.error(f"Error validating {model_id}: {str(e)}")
-        return None
-
 
 def fetch_models_page(
     cursor: Optional[str] = None,
@@ -204,77 +52,83 @@ def fetch_models_page(
     return models, next_cursor
 
 
-def fetch_and_populate_models(limit: int = 20) -> bool:
+def fetch_models_list(limit: int = 20, page_limit: int = 100) -> bool:
     logger.info(f"Starting to fetch and populate models (target: {limit} new models)")
     try:
-        with db.cursor() as cursor:
-            new_models = 0
-            current_cursor = None
-            processed_models = set()
+        new_models = 0
+        current_cursor = None
+        pages_checked = 0
+        while new_models < limit:
+            # Fetch next page of models
+            models_page, next_cursor = fetch_models_page(current_cursor)
+            if not models_page:
+                logger.warning(
+                    f"No more models available from HuggingFace. Found {new_models} new models before exhausting the list."
+                )
+                break
 
-            while new_models < limit:
-                # Fetch next page of models
-                models_page, next_cursor = fetch_models_page(current_cursor)
+            pages_checked += 1
+            logger.info(
+                f"Processing page of {len(models_page)} models (current progress: {new_models}/{limit} new models)"
+            )
 
-                if not models_page:
-                    logger.warning(
-                        f"No more models available from HuggingFace. Found {new_models} new models before exhausting the list."
-                    )
+            # Process models from this page
+            for model_data in models_page:
+                if new_models >= limit:
                     break
 
+                model_id = model_data["id"]
+                with db.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) FROM model WHERE name = %s", (model_id,))
+                    exists = cursor.fetchone()[0] > 0
+                    if exists:
+                        logger.info(f"Model exists in the database: {model_id}")
+                        continue
+
+                library_name = model_data.get("library_name")
+                if not library_name:
+                    logger.error(f"Model {model_id} does not have any library metadata")
+                    continue
+
+                try:
+                    gpu_response = requests.post(
+                        os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT"),
+                        json={"model": model_id, "library_name": library_name},
+                        headers={"Content-Type": "application/json"},
+                        timeout=10,
+                    )
+
+                    if not gpu_response.ok:
+                        logger.error(f"Failed GPU estimation with unexpected status {gpu_response.status_code}: {gpu_response.text}")
+                        continue
+
+                except Exception as e:
+                    logger.error(f"GPU estimation error: {str(e)}")
+                    return False
+
+                new_models += 1
                 logger.info(
-                    f"Processing page of {len(models_page)} models (current progress: {new_models}/{limit} new models)"
+                    f"New model ({new_models}/{limit}): {model_id}"
                 )
 
-                # Process models from this page
-                for model_data in models_page:
-                    if new_models >= limit:
-                        break
+            if new_models >= limit:
+                logger.info(f"Successfully found {limit} new models")
+                break
 
-                    processed_data = validate_and_prepare_model(model_data)
-                    if not processed_data:
-                        continue
+            if not next_cursor:
+                logger.warning(
+                    f"No more pages available. Found {new_models} new models before exhausting all pages."
+                )
+                break
 
-                    model_name = processed_data["name"]
-                    if model_name in processed_models:
-                        logger.debug(f"Skipping already processed model: {model_name}")
-                        continue
+            if pages_checked >= page_limit:
+                logger.info(f"Successfully checked {page_limit} pages on hugging face")
+                break
 
-                    processed_models.add(model_name)
+            current_cursor = next_cursor
 
-                    # Insert model - will silently skip if exists
-                    insert_query = """
-                    INSERT IGNORE INTO model (
-                        name, description, modality, supported_endpoints,
-                        cpt, enabled, required_gpus, custom_build, created_at
-                    ) VALUES (
-                        %(name)s, %(description)s, %(modality)s, %(supported_endpoints)s,
-                        %(cpt)s, %(enabled)s, %(required_gpus)s, %(custom_build)s, NOW()
-                    )
-                    """
-                    cursor.execute(insert_query, processed_data)
-                    if cursor.rowcount == 1:  # Only increment if we actually inserted
-                        new_models += 1
-                        logger.info(
-                            f"New model ({new_models}/{limit}): {model_name} (custom_build: {processed_data['custom_build']})"
-                        )
-                    else:
-                        logger.debug(f"Skipping existing model: {model_name}")
-
-                if new_models >= limit:
-                    logger.info(f"Successfully found {limit} new models")
-                    break
-
-                if not next_cursor:
-                    logger.warning(
-                        f"No more pages available. Found {new_models} new models before exhausting all pages."
-                    )
-                    break
-
-                current_cursor = next_cursor
-
-            logger.info(f"Finished processing models. Added {new_models} new models")
-            return new_models == limit
+        logger.info(f"Finished processing models. Added {new_models} new models")
+        return new_models == limit or pages_checked == page_limit
 
     except Exception as e:
         logger.error({"error": e, "stacktrace": traceback.format_exc()})
@@ -368,6 +222,6 @@ if __name__ == "__main__":
     try:
         calculate_and_insert_daily_stats()
         disable_expired_models()
-        fetch_and_populate_models()
+        fetch_models_list()
     finally:
         db.close()
