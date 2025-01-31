@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 import pymysql
 import requests
 
+HUB_API_ESTIMATE_GPU_ENDPOINT = os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT")
+
 # Initialize logging
 logger = setupLogging()
 
@@ -92,7 +94,7 @@ def fetch_models_list(limit: int = 20, page_limit: int = 100) -> bool:
 
                 try:
                     gpu_response = requests.post(
-                        os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT"),
+                        HUB_API_ESTIMATE_GPU_ENDPOINT,
                         json={"model": model_id, "library_name": library_name},
                         headers={"Content-Type": "application/json"},
                         timeout=10,
