@@ -41,7 +41,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.toml:/etc/traefik/traefik.toml
       - traefik-public-certificates:/certificates
-  
+
   vector:
     image: timberio/vector:0.43.0-debian
     environment:
