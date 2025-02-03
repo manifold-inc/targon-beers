@@ -82,7 +82,8 @@ def fetch_models_list(limit: int = 20, page_limit: int = 100) -> bool:
                 model_id = model_data["id"]
                 with db.cursor() as cursor:
                     cursor.execute("SELECT COUNT(*) FROM model WHERE name = %s", (model_id,))
-                    exists = cursor.fetchone()[0] > 0
+                    result = cursor.fetchone()
+                    exists = (result is not None and result[0] > 0)
                     if exists:
                         logger.info(f"Model exists in the database: {model_id}")
                         continue
