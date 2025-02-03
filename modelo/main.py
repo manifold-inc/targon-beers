@@ -1,11 +1,7 @@
-from typing import Optional, Dict, Any, List, Tuple
 import os
-import json
 from logconfig import setupLogging
 import traceback
-from urllib.parse import parse_qs, urlparse
 import pymysql
-import requests
 
 HUB_API_ESTIMATE_GPU_ENDPOINT = os.getenv("HUB_API_ESTIMATE_GPU_ENDPOINT")
 
@@ -22,121 +18,6 @@ db = pymysql.connect(
     autocommit=True,
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
-
-def fetch_models_page(
-    cursor: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    url = "https://huggingface.co/api/models"
-    params = {
-        "filter": "text-generation",
-        "sort": "downloads",
-        "direction": -1,
-        "limit": 100,
-        "cursor": cursor,
-        "full": True,
-        "config": True,
-    }
-
-    response = requests.get(url, params=params)
-    if not response.ok:
-        logger.error(
-            f"Failed to fetch models: {response.status_code} - {response.text}"
-        )
-        return [], None
-
-    next_url = response.links.get("next", {}).get("url")
-    next_cursor = None
-    if next_url:
-        next_cursor = parse_qs(urlparse(next_url).query)["cursor"][0]
-
-    models = response.json()
-    logger.info(f"Fetched {len(models)} models, next cursor: {next_cursor}")
-    return models, next_cursor
-
-
-def fetch_models_list(limit: int = 20, page_limit: int = 100) -> bool:
-    logger.info(f"Starting to fetch and populate models (target: {limit} new models)")
-    try:
-        new_models = 0
-        current_cursor = None
-        pages_checked = 0
-        while new_models < limit:
-            # Fetch next page of models
-            models_page, next_cursor = fetch_models_page(current_cursor)
-            if not models_page:
-                logger.warning(
-                    f"No more models available from HuggingFace. Found {new_models} new models before exhausting the list."
-                )
-                break
-
-            pages_checked += 1
-            logger.info(
-                f"Processing page of {len(models_page)} models (current progress: {new_models}/{limit} new models)"
-            )
-
-            # Process models from this page
-            for model_data in models_page:
-                if new_models >= limit:
-                    break
-
-                model_id = model_data["id"]
-                with db.cursor() as cursor:
-                    cursor.execute("SELECT COUNT(*) FROM model WHERE name = %s", (model_id,))
-                    result = cursor.fetchone()
-                    exists = (result is not None and result[0] > 0)
-                    if exists:
-                        logger.info(f"Model exists in the database: {model_id}")
-                        continue
-
-                library_name = model_data.get("library_name")
-                if not library_name:
-                    logger.error(f"Model {model_id} does not have any library metadata")
-                    continue
-
-                try:
-                    gpu_response = requests.post(
-                        HUB_API_ESTIMATE_GPU_ENDPOINT,
-                        json={"model": model_id, "library_name": library_name},
-                        headers={"Content-Type": "application/json"},
-                        timeout=10,
-                    )
-
-                    if not gpu_response.ok:
-                        logger.error(f"Failed GPU estimation with unexpected status {gpu_response.status_code}: {gpu_response.text}")
-                        continue
-
-                except Exception as e:
-                    logger.error(f"GPU estimation error: {str(e)}")
-                    return False
-
-                new_models += 1
-                logger.info(
-                    f"New model ({new_models}/{limit}): {model_id}"
-                )
-
-            if new_models >= limit:
-                logger.info(f"Successfully found {limit} new models")
-                break
-
-            if not next_cursor:
-                logger.warning(
-                    f"No more pages available. Found {new_models} new models before exhausting all pages."
-                )
-                break
-
-            if pages_checked >= page_limit:
-                logger.info(f"Successfully checked {page_limit} pages on hugging face")
-                break
-
-            current_cursor = next_cursor
-
-        logger.info(f"Finished processing models. Added {new_models} new models")
-        return new_models == limit or pages_checked == page_limit
-
-    except Exception as e:
-        logger.error({"error": e, "stacktrace": traceback.format_exc()})
-        return False
-
 
 def calculate_and_insert_daily_stats():
     logger.info("Starting Daily Stats")
@@ -225,6 +106,5 @@ if __name__ == "__main__":
     try:
         calculate_and_insert_daily_stats()
         disable_expired_models()
-        fetch_models_list()
     finally:
         db.close()
