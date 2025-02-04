@@ -137,6 +137,26 @@ targon_stats_db = pymysql.connect(
 cache_lock = Lock()  # Initialize the mutex lock
 
 
+def ensure_connection():
+    global targon_hub_db
+    try:
+        logger.info("Checking database connection health...")
+        targon_hub_db.ping(reconnect=True)
+        logger.info("Database connection is healthy")
+    except (pymysql.Error, pymysql.OperationalError) as e:
+        logger.warning(f"Database connection lost: {str(e)}, creating new connection...")
+        # If ping fails, create a new connection
+        targon_hub_db = pymysql.connect(
+            host=os.getenv("HUB_DATABASE_HOST"),
+            user=os.getenv("HUB_DATABASE_USERNAME"),
+            passwd=os.getenv("HUB_DATABASE_PASSWORD"),
+            db=os.getenv("HUB_DATABASE"),
+            autocommit=True,
+            ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
+        )
+        logger.info("New database connection established successfully")
+
+
 @app.post("/organics/scores")
 async def ingest_organics(request: Request):
     logger.info("Start POST /organics/scores")
@@ -456,6 +476,8 @@ async def exgest(request: Request):
 
             if cached_buckets is None or bucket_id is None:
                 model_buckets = {}
+                # Ensure connection is alive before using it
+                ensure_connection()
                 cursor = targon_hub_db.cursor(DictCursor)
                 alphabet = (
                     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
