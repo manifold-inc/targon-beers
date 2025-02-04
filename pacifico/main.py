@@ -516,10 +516,11 @@ async def exgest(request: Request):
                     models = {}
                     response_records = []
                     for record in records:
-                        record["response"] = json.loads(record["response"])
-                        record["request"] = json.loads(record["request"])
+                        record["response"] = json.loads(record["response"]) if record["response"] is not None else None
+                        record["request"] = json.loads(record["request"]) if record["request"] is not None else None
 
                         response_records.append(record)
+                        
                         model = record.get("model_name")
                         if models.get(record.get("model_name")) == None:
                             models[model] = []
