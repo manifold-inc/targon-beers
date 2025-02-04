@@ -606,7 +606,7 @@ async def exgest(request: Request):
 
                     cursor.execute(
                         """
-                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name
+                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name, pub_id
                         FROM request
                         WHERE scored = false 
                         ORDER BY id DESC
