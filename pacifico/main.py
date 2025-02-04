@@ -94,6 +94,12 @@ class OrganicStats(BaseModel):
     coldkey: str
     endpoint: str
     total_tokens: int
+    th_pub_id: str
+
+class OutputItem(BaseModel):
+    text: str
+    token_id: int
+    logprob: float
 
 
 class OrganicsPayload(BaseModel):
@@ -107,6 +113,114 @@ class CurrentBucket(BaseModel):
 def is_authorized_hotkey(cursor, signed_by: str) -> bool:
     cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s", (signed_by,))
     return cursor.fetchone() is not None
+
+
+def parse_token_id(token: str) -> Optional[int]:
+    """Parse token string into token ID."""
+    if not token:
+        return -1
+
+    if token.startswith("token_id:"):
+        try:
+            return int(token.split(":")[1])
+        except (IndexError, ValueError):
+            return None
+
+    try:
+        return int(token)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_chunk(chunk: Dict, request_type: str) -> Optional[OutputItem]:
+    """Parse a raw chunk into an OutputItem with token info."""
+    try:
+        choices = chunk.get("choices", [])
+        if not choices:
+            return None
+
+        choice = choices[0]
+
+        if request_type == "CHAT":
+            delta = choice.get("delta")
+            if delta is None:
+                return None
+
+            # Skip assistant role messages without content/tools
+            if delta.get("role") == "assistant" and not any(
+                [delta.get(k) for k in ["content", "tool_calls", "function_call"]]
+            ):
+                return None
+
+            choiceprobs = choice.get("logprobs")
+            if not choiceprobs:
+                return None
+
+            content_probs = choiceprobs.get("content", [{}])[0]
+            token = content_probs.get("token", "")
+            token_id = parse_token_id(token)
+            if token_id is None:
+                return None
+
+            # Get text from bytes if available
+            bytes_data = content_probs.get("bytes", [])
+            if bytes_data:
+                text = ''.join(chr(b) for b in bytes_data)
+            else:
+                # If no bytes, use the content or tool call argument piece
+                if delta.get("content") is not None:
+                    text = delta.get("content", "")
+                elif delta.get("tool_calls"):
+                    text = delta["tool_calls"][0]["function"]["arguments"]
+                else:
+                    text = ""
+
+            if token_id == -1:
+                return None
+
+            return OutputItem(
+                text=text,
+                token_id=token_id,
+                logprob=content_probs.get("logprob", -100),
+            )
+
+        elif request_type == "COMPLETION":
+            text = choice.get("text")
+            logprobs = choice.get("logprobs")
+
+            if text == None or logprobs == None:
+                return None
+
+            token = logprobs.get("tokens", [""])[0]
+            token_id = parse_token_id(token)
+            if token_id is None:
+                return None
+
+            if token_id == -1:
+                return None
+
+            token_logprobs = logprobs.get("token_logprobs", [])
+            logprob = token_logprobs[0] if token_logprobs else -100
+
+            return OutputItem(text=text, token_id=token_id, logprob=logprob)
+
+    except Exception:
+        return None
+
+
+def parse_raw_chunks_to_simple(chunks, request_type="COMPLETION"):
+    """Parse raw chunks into a simple format with just text, logprob, and token_id."""
+    simple_tokens = []
+    for chunk in chunks:
+        item = parse_chunk(chunk, request_type)
+        if item:
+            simple_tokens.append({
+                'text': item.text,
+                'token_id': item.token_id,
+                'logprob': item.logprob
+            })
+    return simple_tokens
+
 
 
 # Global variables for bucket management
@@ -232,9 +346,10 @@ async def ingest_organics(request: Request):
                 total_time,
                 tps,
                 error,
-                cause
+                cause,
+                th_pub_id
                 ) 
-            VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
                 (
@@ -254,6 +369,7 @@ async def ingest_organics(request: Request):
                     md.tps,
                     md.error,
                     md.cause,
+                    md.th_pub_id
                 )
                 for md in payload.organics
             ],
@@ -353,7 +469,7 @@ async def ingest(request: Request):
                     md.stats.time_to_first_token,
                     md.stats.time_for_all_tokens,
                     md.stats.total_time,
-                    json.dumps(md.stats.tokens),
+                    json.dumps(parse_raw_chunks_to_simple(md.stats.tokens, "CHAT" if "chat" in payload.request.request_endpoint.lower() else "COMPLETION")),
                     md.stats.tps,
                     md.stats.error,
                     md.stats.cause,
