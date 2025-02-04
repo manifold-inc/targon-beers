@@ -112,8 +112,8 @@ def is_authorized_hotkey(cursor, signed_by: str) -> bool:
 # Global variables for bucket management
 current_bucket = CurrentBucket()
 
-# Cache: Store the data for 20 minutes (1200 seconds)
-cache = TTLCache(maxsize=2, ttl=1200)
+# Cache: Store the data for 5 blocks
+cache = TTLCache(maxsize=2, ttl=5 * 12)
 
 targon_hub_db = pymysql.connect(
     host=os.getenv("HUB_DATABASE_HOST"),
@@ -144,7 +144,9 @@ def ensure_connection():
         targon_hub_db.ping(reconnect=True)
         logger.info("Database connection is healthy")
     except (pymysql.Error, pymysql.OperationalError) as e:
-        logger.warning(f"Database connection lost: {str(e)}, creating new connection...")
+        logger.warning(
+            f"Database connection lost: {str(e)}, creating new connection..."
+        )
         # If ping fails, create a new connection
         targon_hub_db = pymysql.connect(
             host=os.getenv("HUB_DATABASE_HOST"),
@@ -516,11 +518,19 @@ async def exgest(request: Request):
                     models = {}
                     response_records = []
                     for record in records:
-                        record["response"] = json.loads(record["response"]) if record["response"] is not None else None
-                        record["request"] = json.loads(record["request"]) if record["request"] is not None else None
+                        record["response"] = (
+                            json.loads(record["response"])
+                            if record["response"] is not None
+                            else None
+                        )
+                        record["request"] = (
+                            json.loads(record["request"])
+                            if record["request"] is not None
+                            else None
+                        )
 
                         response_records.append(record)
-                        
+
                         model = record.get("model_name")
                         if models.get(record.get("model_name")) == None:
                             models[model] = []
