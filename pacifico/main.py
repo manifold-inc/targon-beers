@@ -94,7 +94,7 @@ class OrganicStats(BaseModel):
     coldkey: str
     endpoint: str
     total_tokens: int
-    th_pub_id: str
+    pub_id: str
 
 
 class OrganicsPayload(BaseModel):
@@ -108,6 +108,7 @@ class CurrentBucket(BaseModel):
 def is_authorized_hotkey(cursor, signed_by: str) -> bool:
     cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s", (signed_by,))
     return cursor.fetchone() is not None
+
 
 # Global variables for bucket management
 current_bucket = CurrentBucket()
@@ -255,7 +256,7 @@ async def ingest_organics(request: Request):
                     md.tps,
                     md.error,
                     md.cause,
-                    md.th_pub_id
+                    md.pub_id,
                 )
                 for md in payload.organics
             ],
@@ -488,10 +489,8 @@ async def exgest(request: Request):
                 )
                 bucket_id = "b_" + generate(alphabet=alphabet, size=14)
                 try:
-
                     all_records = []
                     for i in range(1, 11):
-
                         cursor.execute(
                             """
                             SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name, pub_id
@@ -519,7 +518,7 @@ async def exgest(request: Request):
                                 """,
                                 record_ids,
                             )
-                        
+
                         all_records.extend(batch)
 
                     # Convert records to ResponseRecord objects
