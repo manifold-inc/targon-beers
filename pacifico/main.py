@@ -488,38 +488,44 @@ async def exgest(request: Request):
                 )
                 bucket_id = "b_" + generate(alphabet=alphabet, size=14)
                 try:
-                    # Generate bucket ID for this model
 
-                    cursor.execute(
-                        """
-                        SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name, pub_id
-                        FROM request
-                        WHERE scored = false 
-                        ORDER BY id DESC
-                        LIMIT 100
-                        """,
-                    )
+                    all_records = []
+                    for i in range(1, 6):
 
-                    records = cursor.fetchall()
-
-                    # If we have records, mark them as scored
-                    if records:
-                        record_ids = [record["id"] for record in records]
-                        placeholders = ", ".join(["%s"] * len(record_ids))
-                        logger.info("Updating all records")
                         cursor.execute(
-                            f"""
-                            UPDATE request 
-                            SET scored = true 
-                            WHERE id IN ({placeholders})
-                            """,
-                            record_ids,
+                            """
+                            SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name, pub_id
+                            FROM request
+                            WHERE scored = false 
+                            ORDER BY id DESC
+                            LIMIT 20
+                        """,
                         )
+
+                        batch = cursor.fetchall()
+                        if not batch:
+                            break
+
+                        # If we have records, mark them as scored
+                        if batch:
+                            record_ids = [record["id"] for record in batch]
+                            placeholders = ", ".join(["%s"] * len(record_ids))
+                            logger.info(f"Updating {i} batch of records")
+                            cursor.execute(
+                                f"""
+                                UPDATE request 
+                                SET scored = true 
+                                WHERE id IN ({placeholders})
+                                """,
+                                record_ids,
+                            )
+                        
+                        all_records.extend(batch)
 
                     # Convert records to ResponseRecord objects
                     models = {}
                     response_records = []
-                    for record in records:
+                    for record in all_records:
                         record["response"] = (
                             json.loads(record["response"])
                             if record["response"] is not None
