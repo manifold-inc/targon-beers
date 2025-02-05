@@ -490,7 +490,7 @@ async def exgest(request: Request):
                 try:
 
                     all_records = []
-                    for i in range(1, 6):
+                    for i in range(1, 11):
 
                         cursor.execute(
                             """
@@ -498,7 +498,7 @@ async def exgest(request: Request):
                             FROM request
                             WHERE scored = false 
                             ORDER BY id DESC
-                            LIMIT 20
+                            LIMIT 10
                         """,
                         )
 
