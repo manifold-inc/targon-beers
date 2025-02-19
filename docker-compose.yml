@@ -11,6 +11,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pacifico
+    networks:
+      - targon-beers
     env_file: .env
 
   modelo:
@@ -41,6 +43,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.toml:/etc/traefik/traefik.toml
       - traefik-public-certificates:/certificates
+    networks:
+      - targon-beers
   
   vector:
     image: timberio/vector:0.43.0-debian
@@ -52,6 +56,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: --config /etc/vector/vector.toml
     restart: unless-stopped
+
+networks:
+  targon-beers:
 
 volumes:
   traefik-public-certificates:
