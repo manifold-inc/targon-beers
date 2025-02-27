@@ -107,6 +107,11 @@ class CurrentBucket(BaseModel):
     id: Optional[str] = None
 
 
+class CapacityPayload(BaseModel):
+    uid: int
+    success_percentage: float
+    gpu_details: List[Dict[str, Any]]
+
 def is_authorized_hotkey(cursor, signed_by: str) -> bool:
     cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s", (signed_by,))
     return cursor.fetchone() is not None
