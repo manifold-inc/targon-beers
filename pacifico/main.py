@@ -39,6 +39,7 @@ class Stats(BaseModel):
     verified: bool
     error: Optional[str] = None
     cause: Optional[str] = None
+    gpus: Optional[int] = None
 
 
 # Define the MinerResponse model
@@ -95,6 +96,7 @@ class OrganicStats(BaseModel):
     endpoint: str
     total_tokens: int
     pub_id: str
+    gpus: Optional[int] = None
 
 
 class OrganicsPayload(BaseModel):
@@ -104,6 +106,11 @@ class OrganicsPayload(BaseModel):
 class CurrentBucket(BaseModel):
     id: Optional[str] = None
 
+
+class CapacityPayload(BaseModel):
+    uid: int
+    success_percentage: float
+    gpu_details: List[Dict[str, Any]]
 
 def is_authorized_hotkey(cursor, signed_by: str) -> bool:
     cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s", (signed_by,))
@@ -591,6 +598,100 @@ async def exgest(request: Request):
         raise HTTPException(
             status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
         )
+
+
+@app.post("/capacity")
+async def upsert_capacity(request: Request):
+    logger.info("Start POST /capacity")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)  # Unique ID for tracking request flow
+    body = await request.body()
+    json_data = await request.json()
+
+    # Extract signature information from headers
+    timestamp = request.headers.get("Epistula-Timestamp")
+    uuid = request.headers.get("Epistula-Uuid")
+    signed_by = request.headers.get("Epistula-Signed-By")
+    signature = request.headers.get("Epistula-Request-Signature")
+
+    # Verify the signature using the epistula protocol
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
+
+    if err:
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "upsert_capacity",
+                "request_id": request_id,
+                "error": str(err),
+                "traceback": "Signature verification failed",
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(status_code=400, detail=str(err))
+
+    cursor = targon_stats_db.cursor()
+    try:
+        payload = CapacityPayload(**json_data)
+        # Check if the sender is an authorized hotkey
+        if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+            logger.error(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "upsert_capacity",
+                    "request_id": request_id,
+                    "error": str("Unauthorized hotkey"),
+                    "traceback": f"Unauthorized hotkey: {signed_by}",
+                    "type": "error_log",
+                }
+            )
+            raise HTTPException(
+                status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
+            )
+        cursor.execute(
+            """
+            INSERT INTO miner_capacity (uid, success_percentage, gpu_details) 
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                success_percentage = VALUES(success_percentage),
+                gpu_details = VALUES(gpu_details)
+            """,
+            (
+                payload.uid,
+                payload.success_percentage,
+                json.dumps(payload.gpu_details),
+            ),
+        )
+
+        targon_stats_db.commit()
+        return "", 200
+
+    except Exception as e:
+        targon_stats_db.rollback()
+        error_traceback = traceback.format_exc()
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "upsert_capacity",
+                "request_id": request_id,
+                "error": str(e),
+                "traceback": error_traceback,
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"[{request_id}] Internal Server Error: Could not upsert capacity. {str(e)}",
+        )
+    finally:
+        cursor.close()
 
 
 @app.get("/ping")
