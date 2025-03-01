@@ -39,7 +39,7 @@ class Stats(BaseModel):
     verified: bool
     error: Optional[str] = None
     cause: Optional[str] = None
-    gpus: int
+    gpus: Optional[int] = None
 
 
 # Define the MinerResponse model
@@ -96,7 +96,7 @@ class OrganicStats(BaseModel):
     endpoint: str
     total_tokens: int
     pub_id: str
-    gpus: int
+    gpus: Optional[int] = None
 
 
 class OrganicsPayload(BaseModel):
