@@ -14,6 +14,9 @@ services:
     networks:
       - targon-beers
     env_file: .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
 
   modelo:
     image: manifoldlabs/targon-modelo
@@ -68,6 +71,8 @@ services:
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-admin}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-password}
+      - MONGO_INITDB_DATABASE=${MONGO_INITDB_DATABASE:-targon}
+      - MONGO_HOST=${MONGO_HOST:-jugo.targon.com}
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s

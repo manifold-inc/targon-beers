@@ -1,6 +1,9 @@
 services:
   pacifico:
     platform: linux/arm64
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
     labels:
       - traefik.enable=true
       - traefik.http.routers.pacifico.rule=Host(`localhost`)
@@ -8,6 +11,8 @@ services:
       - traefik.http.routers.pacifico.tls.certresolver=
       - traefik.http.services.pacifico.loadbalancer.server.port=80
       - vector.enable=false
+    networks:
+      - targon-beers
 
   modelo:
     platform: linux/arm64
@@ -26,7 +31,7 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.toml:/etc/traefik/traefik.toml
+      - ./traefik/traefik.dev.toml:/etc/traefik/traefik.toml
       - traefik-public-certificates:/certificates
     networks:
       - targon-beers
@@ -42,6 +47,11 @@ services:
     environment:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=password
+      - MONGO_INITDB_DATABASE=targon
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - targon-beers
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s

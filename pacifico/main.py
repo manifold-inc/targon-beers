@@ -16,19 +16,16 @@ from asyncio import Lock
 
 from logconfig import setupLogging
 
+from pymongo import MongoClient
 
 pymysql.install_as_MySQLdb()
 load_dotenv()
-
 DEBUG = not not os.getenv("DEBUG")
-
 config = {}
 if not DEBUG:
     config = {"docs_url": None, "redoc_url": None}
 app = FastAPI(**config)  # type: ignore
-
 logger = setupLogging()
-
 
 class Stats(BaseModel):
     time_to_first_token: float
@@ -141,9 +138,23 @@ targon_stats_db = pymysql.connect(
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
 
+username = os.getenv("MONGO_INITDB_ROOT_USERNAME", "admin")
+password = os.getenv("MONGO_INITDB_ROOT_PASSWORD", "password")
+mongo_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
+mongo_host = os.getenv("MONGO_HOST", "mongodb")  
+mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
+
+try:
+    mongo_client = MongoClient(mongo_uri)
+    # Test the connection
+    mongo_client.admin.command('ping')
+    mongo_db = mongo_client.targon
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {str(e)}")
+    raise
+
 # Create a single lock instance - this is shared across all requests
 cache_lock = Lock()  # Initialize the mutex lock
-
 
 def ensure_connection():
     global targon_hub_db
@@ -441,6 +452,83 @@ async def ingest(request: Request):
     finally:
         cursor.close()
 
+# Ingest Mongo DB
+@app.post("/mongo")
+async def ingest_mongo(request: Request):
+    logger.info("Start POST /mongo")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
+    body = await request.body()
+    json_data = await request.json()
+
+    # Extract signature information from headers
+    timestamp = request.headers.get("Epistula-Timestamp")
+    uuid = request.headers.get("Epistula-Uuid")
+    signed_by = request.headers.get("Epistula-Signed-By")
+    signature = request.headers.get("Epistula-Request-Signature")
+    origin = request.headers.get("Epistula-Origin")
+
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
+
+    if err:
+        logger.error({
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "error": str(err),
+            "traceback": "Signature verification failed",
+        })
+        raise HTTPException(status_code=400, detail=str(err))
+    
+    cursor = None
+    try:
+        # Only verify hotkey if not from targon-hub-api
+        if origin != "targon-hub-api":
+            cursor = targon_stats_db.cursor()
+            if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+                logger.error({
+                    "service": "targon-pacifico",
+                    "endpoint": "mongo",
+                    "request_id": request_id,
+                    "error": "Unauthorized hotkey", 
+                    "traceback": f"Unauthorized hotkey: {signed_by}",
+                    "type": "error_log",
+                })
+                raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
+
+        # Insert into MongoDB
+        mongo_db.uid_responses.update_one(
+            {"uid": json_data["uid"]},
+            {"$set": json_data},
+            upsert=True
+        )
+        
+        return "", 200
+
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        logger.error({
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "error": str(e),
+            "traceback": error_traceback,
+            "type": "error_log",
+        })
+        raise HTTPException(
+            status_code=500,
+            detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}"
+        )
+    finally:
+        if cursor:
+            cursor.close()
 
 # Exegestor endpoint
 @app.post("/organics")
