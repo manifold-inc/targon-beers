@@ -467,21 +467,20 @@ async def ingest_mongo(request: Request):
     uuid = request.headers.get("Epistula-Uuid")
     signed_by = request.headers.get("Epistula-Signed-By")
     signature = request.headers.get("Epistula-Request-Signature")
-    origin = request.headers.get("Epistula-Origin")
+    service = request.headers.get("X-Targon-Service")
 
     # First determine if this is a targon-hub-api request
-    is_hub_request = origin == "targon-hub-api"
+    is_hub_request = service == "targon-hub-api"
 
-    # Only verify signature if not from hub API
-    if not is_hub_request:
-        err = verify_signature(
-            signature=signature,
-            body=body,
-            timestamp=timestamp,
-            uuid=uuid,
-            signed_by=signed_by,
-            now=now,
-        )
+    # verify signature
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
 
     if err:
         logger.error({
@@ -496,23 +495,16 @@ async def ingest_mongo(request: Request):
     
     cursor = None
     try:
-        # Determine the hotkey - either from signed_by or origin
-        validator_hotkey = signed_by if not is_hub_request else origin
-        if not validator_hotkey:
-            raise HTTPException(status_code=400, detail="No validator hotkey or origin provided")
-
-        # Only verify hotkey if not from targon-hub-api
-        if not is_hub_request:
-            cursor = targon_stats_db.cursor()
-            if not is_authorized_hotkey(cursor, signed_by):
-                logger.error({
-                    "service": "targon-pacifico",
-                    "endpoint": "mongo",
-                    "request_id": request_id,
-                    "error": "Unauthorized hotkey", 
-                    "traceback": f"Unauthorized hotkey: {signed_by}",
-                    "type": "error_log",
-                })
+        cursor = targon_stats_db.cursor()
+        if not is_authorized_hotkey(cursor, signed_by):
+            logger.error({
+                "service": "targon-pacifico",
+                "endpoint": "mongo",
+                "request_id": request_id,
+                "error": "Unauthorized hotkey", 
+                "traceback": f"Unauthorized hotkey: {signed_by}",
+                "type": "error_log",
+            })
             raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
 
         # Convert input to list if it's not already
@@ -530,7 +522,7 @@ async def ingest_mongo(request: Request):
                     {"uid": uid},
                     {
                         "$set": {
-                            f"validators.{validator_hotkey}": doc,
+                            f"validators.{'targon-hub-api' if is_hub_request else signed_by}": doc,
                             "last_updated": now
                         }
                     },
