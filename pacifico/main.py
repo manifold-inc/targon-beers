@@ -473,39 +473,39 @@ async def ingest_mongo(request: Request):
     is_hub_request = service == "targon-hub-api"
 
     # verify signature
-    #err = verify_signature(
-    #    signature=signature,
-    #    body=body,
-    #    timestamp=timestamp,
-    #    uuid=uuid,
-    #    signed_by=signed_by,
-    #    now=now,
-    #)
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
 
-    #if err:
-    #    logger.error({
-    #        "service": "targon-pacifico",
-    #        "endpoint": "mongo",
-    #        "request_id": request_id,
-    #        "error": str(err),
-    #        "traceback": "Signature verification failed",
-    #        "type": "error_log",
-    #    })
-    #    raise HTTPException(status_code=400, detail=str(err))
+    if err:
+        logger.error({
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "error": str(err),
+            "traceback": "Signature verification failed",
+            "type": "error_log",
+        })
+        raise HTTPException(status_code=400, detail=str(err))
     
     cursor = None
     try:
         cursor = targon_stats_db.cursor()
-        #if not is_authorized_hotkey(cursor, signed_by):
-        #    logger.error({
-        #        "service": "targon-pacifico",
-        #        "endpoint": "mongo",
-        #        "request_id": request_id,
-        #        "error": "Unauthorized hotkey", 
-        #        "traceback": f"Unauthorized hotkey: {signed_by}",
-        #        "type": "error_log",
-        #    })
-        #    raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
+        if not is_authorized_hotkey(cursor, signed_by):
+            logger.error({
+                "service": "targon-pacifico",
+                "endpoint": "mongo",
+                "request_id": request_id,
+                "error": "Unauthorized hotkey", 
+                "traceback": f"Unauthorized hotkey: {signed_by}",
+                "type": "error_log",
+            })
+            raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
 
         # Convert input to list if it's not already
         documents = json_data if isinstance(json_data, list) else [json_data]
