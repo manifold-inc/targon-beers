@@ -16,19 +16,17 @@ from asyncio import Lock
 
 from logconfig import setupLogging
 
+from pymongo import MongoClient
+from pymongo.operations import UpdateOne
 
 pymysql.install_as_MySQLdb()
 load_dotenv()
-
 DEBUG = not not os.getenv("DEBUG")
-
 config = {}
 if not DEBUG:
     config = {"docs_url": None, "redoc_url": None}
 app = FastAPI(**config)  # type: ignore
-
 logger = setupLogging()
-
 
 class Stats(BaseModel):
     time_to_first_token: float
@@ -141,9 +139,23 @@ targon_stats_db = pymysql.connect(
     ssl={"ssl_ca": "/etc/ssl/certs/ca-certificates.crt"},
 )
 
+username = os.getenv("MONGO_INITDB_ROOT_USERNAME", "admin")
+password = os.getenv("MONGO_INITDB_ROOT_PASSWORD", "password")
+mongo_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
+mongo_host = os.getenv("MONGO_HOST", "mongodb")  
+mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
+
+try:
+    mongo_client = MongoClient(mongo_uri)
+    # Test the connection
+    mongo_client.admin.command('ping')
+    mongo_db = mongo_client.targon
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {str(e)}")
+    raise
+
 # Create a single lock instance - this is shared across all requests
 cache_lock = Lock()  # Initialize the mutex lock
-
 
 def ensure_connection():
     global targon_hub_db
@@ -441,6 +453,118 @@ async def ingest(request: Request):
     finally:
         cursor.close()
 
+# Ingest Mongo DB
+@app.post("/mongo")
+async def ingest_mongo(request: Request):
+    logger.info("Start POST /mongo")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
+    body = await request.body()
+    json_data = await request.json()
+
+    # Extract signature information from headers
+    timestamp = request.headers.get("Epistula-Timestamp")
+    uuid = request.headers.get("Epistula-Uuid")
+    signed_by = request.headers.get("Epistula-Signed-By")
+    signature = request.headers.get("Epistula-Request-Signature")
+    service = request.headers.get("X-Targon-Service")
+
+    # First determine if this is a targon-hub-api request
+    is_hub_request = service == "targon-hub-api"
+
+    # verify signature
+    err = verify_signature(
+        signature=signature,
+        body=body,
+        timestamp=timestamp,
+        uuid=uuid,
+        signed_by=signed_by,
+        now=now,
+    )
+
+    if err:
+        logger.error({
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "error": str(err),
+            "traceback": "Signature verification failed",
+            "type": "error_log",
+        })
+        raise HTTPException(status_code=400, detail=str(err))
+    
+    cursor = None
+    try:
+        cursor = targon_stats_db.cursor()
+        if not is_authorized_hotkey(cursor, signed_by):
+            logger.error({
+                "service": "targon-pacifico",
+                "endpoint": "mongo",
+                "request_id": request_id,
+                "error": "Unauthorized hotkey", 
+                "traceback": f"Unauthorized hotkey: {signed_by}",
+                "type": "error_log",
+            })
+            raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
+
+        # Convert input to list if it's not already
+        documents = json_data if isinstance(json_data, list) else [json_data]
+
+        # prepare bulk operations
+        bulk_operations = []
+        for doc in documents:
+            uid = doc.get("uid")
+            if not uid:
+                raise HTTPException(status_code=400, detail="Missing uid in json input.")
+
+            bulk_operations.append(
+                UpdateOne(
+                    {"uid": uid},
+                    {
+                        "$set": {
+                            f"{'targon-hub-api' if is_hub_request else signed_by}": doc,
+                            "last_updated": now
+                        }
+                    },
+                    upsert=True
+                )
+            )
+
+        if bulk_operations:
+            result = mongo_db.uid_responses.bulk_write(
+                bulk_operations, ordered=False
+            )
+
+            logger.info({
+                "service": "targon-pacifico",
+                "endpoint": "mongo",
+                "request_id": request_id,
+                "modified_count": result.modified_count,
+                "upserted_count": result.upserted_count,
+                "upserted_ids": result.upserted_ids,
+                "matched_count": result.matched_count,
+                "type": "info_log"
+            })
+
+        return "", 200
+
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        logger.error({
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "error": str(e),
+            "traceback": error_traceback,
+            "type": "error_log",
+        })
+        raise HTTPException(
+            status_code=500,
+            detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}"
+        )
+    finally:
+        if cursor:
+            cursor.close()
 
 # Exegestor endpoint
 @app.post("/organics")
