@@ -17,6 +17,7 @@ from asyncio import Lock
 from logconfig import setupLogging
 
 from pymongo import MongoClient
+from pymongo.operations import UpdateOne
 
 pymysql.install_as_MySQLdb()
 load_dotenv()
@@ -468,14 +469,19 @@ async def ingest_mongo(request: Request):
     signature = request.headers.get("Epistula-Request-Signature")
     origin = request.headers.get("Epistula-Origin")
 
-    err = verify_signature(
-        signature=signature,
-        body=body,
-        timestamp=timestamp,
-        uuid=uuid,
-        signed_by=signed_by,
-        now=now,
-    )
+    # First determine if this is a targon-hub-api request
+    is_hub_request = origin == "targon-hub-api"
+
+    # Only verify signature if not from hub API
+    if not is_hub_request:
+        err = verify_signature(
+            signature=signature,
+            body=body,
+            timestamp=timestamp,
+            uuid=uuid,
+            signed_by=signed_by,
+            now=now,
+        )
 
     if err:
         logger.error({
@@ -484,15 +490,21 @@ async def ingest_mongo(request: Request):
             "request_id": request_id,
             "error": str(err),
             "traceback": "Signature verification failed",
-        })
+            "type": "error_log",
+            })
         raise HTTPException(status_code=400, detail=str(err))
     
     cursor = None
     try:
+        # Determine the hotkey - either from signed_by or origin
+        validator_hotkey = signed_by if not is_hub_request else origin
+        if not validator_hotkey:
+            raise HTTPException(status_code=400, detail="No validator hotkey or origin provided")
+
         # Only verify hotkey if not from targon-hub-api
-        if origin != "targon-hub-api":
+        if not is_hub_request:
             cursor = targon_stats_db.cursor()
-            if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+            if not is_authorized_hotkey(cursor, signed_by):
                 logger.error({
                     "service": "targon-pacifico",
                     "endpoint": "mongo",
@@ -501,15 +513,47 @@ async def ingest_mongo(request: Request):
                     "traceback": f"Unauthorized hotkey: {signed_by}",
                     "type": "error_log",
                 })
-                raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
+            raise HTTPException(status_code=401, detail=f"Unauthorized hotkey: {signed_by}")
 
-        # Insert into MongoDB
-        mongo_db.uid_responses.update_one(
-            {"uid": json_data["uid"]},
-            {"$set": json_data},
-            upsert=True
-        )
-        
+        # Convert input to list if it's not already
+        documents = json_data if isinstance(json_data, list) else [json_data]
+
+        # prepare bulk operations
+        bulk_operations = []
+        for doc in documents:
+            uid = doc.get("uid")
+            if not uid:
+                raise HTTPException(status_code=400, detail="Missing uid in json input.")
+
+            bulk_operations.append(
+                UpdateOne(
+                    {"uid": uid},
+                    {
+                        "$set": {
+                            f"validators.{validator_hotkey}": doc,
+                            "last_updated": now
+                        }
+                    },
+                    upsert=True
+                )
+            )
+
+        if bulk_operations:
+            result = mongo_db.uid_responses.bulk_write(
+                bulk_operations, ordered=False
+            )
+
+            logger.info({
+                "service": "targon-pacifico",
+                "endpoint": "mongo",
+                "request_id": request_id,
+                "modified_count": result.modified_count,
+                "upserted_count": result.upserted_count,
+                "upserted_ids": result.upserted_ids,
+                "matched_count": result.matched_count,
+                "type": "info_log"
+            })
+
         return "", 200
 
     except Exception as e:
