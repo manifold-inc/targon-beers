@@ -521,6 +521,7 @@ async def ingest_mongo(request: Request):
         documents = json_data if isinstance(json_data, list) else [json_data]
 
         # prepare bulk operations
+        mongo_key = {"targon-hub-api" if is_hub_request else signed_by}
         bulk_operations = []
         for doc in documents:
             uid = doc.get("uid")
@@ -528,18 +529,14 @@ async def ingest_mongo(request: Request):
                 raise HTTPException(
                     status_code=400, detail="Missing uid in json input."
                 )
+            updates = {"last_updated": now}
+            for key, value in doc.get("data", {}).items():
+                updates[f"{mongo_key}.{key}"] = value
 
             bulk_operations.append(
                 UpdateOne(
                     {"uid": uid},
-                    {
-                        "$set": {
-                            f"{'targon-hub-api' if is_hub_request else signed_by}": doc.get(
-                                "data"
-                            ),
-                            "last_updated": now,
-                        }
-                    },
+                    {"$set": updates},
                     upsert=True,
                 )
             )
@@ -739,6 +736,7 @@ async def exgest(request: Request):
         raise HTTPException(
             status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
         )
+
 
 @app.get("/ping")
 def ping():
