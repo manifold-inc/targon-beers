@@ -521,7 +521,7 @@ async def ingest_mongo(request: Request):
         documents = json_data if isinstance(json_data, list) else [json_data]
 
         # prepare bulk operations
-        mongo_key = {"targon-hub-api" if is_hub_request else signed_by}
+        mongo_key = "targon-hub-api" if is_hub_request else signed_by
         bulk_operations = []
         for doc in documents:
             uid = doc.get("uid")
