@@ -534,7 +534,9 @@ async def ingest_mongo(request: Request):
                     {"uid": uid},
                     {
                         "$set": {
-                            f"{'targon-hub-api' if is_hub_request else signed_by}": doc,
+                            f"{'targon-hub-api' if is_hub_request else signed_by}": doc.get(
+                                "data"
+                            ),
                             "last_updated": now,
                         }
                     },
