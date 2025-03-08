@@ -507,7 +507,6 @@ async def get_organic_metadata(request: Request):
                     status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
                 )
 
-
         # query mongo for global and miner data
         global_doc = mongo_db.find_one({"uid": -1})
         miner_docs = mongo_db.find({"uid": {"$ne": -1}})
@@ -521,11 +520,13 @@ async def get_organic_metadata(request: Request):
         if global_doc is not None and "targon-hub-api" in global_doc:
             global_data = global_doc.get("targon-hub-api", {}).get("api", {})
             metadata["total_attempted"] = global_data.get("totalAttemptedWindow", 0)
-            
 
         # iterate over miner docs for sums
         for doc in miner_docs:
-            uid = str(doc.get("uid"))
+            uid = doc.get("uid", None)
+            if uid is None:
+                continue
+            uid = str(uid)
 
             # get api data
             api_data = doc.get("targon-hub-api", {}).get("api", {})
@@ -536,11 +537,11 @@ async def get_organic_metadata(request: Request):
 
                 # Calculate the sum of the completed_window array
                 completed_sum = sum(completed_window) if completed_window else 0
-                
+
                 # Add miner data to response
                 metadata["miners"][uid] = {
                     "success_rate": avg_success_rate,
-                    "completed": completed_sum,  
+                    "completed": completed_sum,
                 }
 
         return metadata
