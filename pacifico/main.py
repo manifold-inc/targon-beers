@@ -143,15 +143,15 @@ targon_stats_db = pymysql.connect(
 
 username = os.getenv("MONGO_INITDB_ROOT_USERNAME", "admin")
 password = os.getenv("MONGO_INITDB_ROOT_PASSWORD", "password")
-mongo_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
+mongo_db_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
 mongo_host = os.getenv("MONGO_HOST", "mongodb")
-mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
+mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
 
 try:
     mongo_client = MongoClient(mongo_uri)
     # Test the connection
     mongo_client.admin.command("ping")
-    mongo_db = mongo_client.targon
+    mongo_db = mongo_client.targon.uid_responses
 except Exception as e:
     print(f"Failed to connect to MongoDB: {str(e)}")
     raise
@@ -455,6 +455,87 @@ async def ingest(request: Request):
         cursor.close()
 
 
+@app.get("/organics/metadata")
+async def get_organic_metadata(request: Request):
+    logger.info("Start GET /organics/metadata")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
+    try:
+        # Extract signature information from headers
+        timestamp = request.headers.get("Epistula-Timestamp", "")
+        uuid = request.headers.get("Epistula-Uuid", "")
+        signed_by = request.headers.get("Epistula-Signed-By", "")
+        signature = request.headers.get("Epistula-Request-Signature", "")
+
+        # verify signature
+        err = verify_signature(
+            signature=signature,
+            body=b"",
+            timestamp=timestamp,
+            uuid=uuid,
+            signed_by=signed_by,
+            now=now,
+        )
+
+        if err:
+            logger.error(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "organics/metadata",
+                    "request_id": request_id,
+                    "error": str(err),
+                    "traceback": "Signature verification failed",
+                    "type": "error_log",
+                }
+            )
+            raise HTTPException(status_code=400, detail=str(err))
+
+        targon_stats_db.ping()
+        with targon_stats_db.cursor() as cursor:
+            if not is_authorized_hotkey(cursor, signed_by):
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "mongo",
+                        "request_id": request_id,
+                        "error": "Unauthorized hotkey",
+                        "traceback": f"Unauthorized hotkey: {signed_by}",
+                        "type": "error_log",
+                    }
+                )
+                raise HTTPException(
+                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
+                )
+
+        # TODO @sarokhan
+        # Return type needs to contain atleast the following
+        metadata = {
+            "total_attempted": 0,
+            "miners": {"1": {"success_rate": 0.5, "completed": 100}},
+        }
+        # Global data is under uid -1, just poke around the mongo db via compass
+        # You may need to compute the miner's completed field, i think i store
+        # it as an array in mongo. just sum the array, its a sliding window
+        result = mongo_db  # get data from mongo
+
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "organics/metadata",
+                "request_id": request_id,
+                "error": str(e),
+                "traceback": error_traceback,
+                "type": "error_log",
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}",
+        )
+
+
 # Ingest Mongo DB
 @app.post("/mongo")
 async def ingest_mongo(request: Request):
@@ -540,7 +621,7 @@ async def ingest_mongo(request: Request):
             )
 
         if bulk_operations:
-            result = mongo_db.uid_responses.bulk_write(bulk_operations, ordered=False)
+            result = mongo_db.bulk_write(bulk_operations, ordered=False)
 
             logger.info(
                 {
