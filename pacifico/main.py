@@ -219,93 +219,91 @@ async def ingest_organics(request: Request):
         )
         raise HTTPException(status_code=400, detail=str(err))
 
-    cursor = targon_stats_db.cursor()
-    try:
-        payload = OrganicsPayload(**json_data)
-        # Check if the sender is an authorized hotkey
-        if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+    with targon_stats_db.cursor() as cursor:
+        try:
+            payload = OrganicsPayload(**json_data)
+            # Check if the sender is an authorized hotkey
+            if not signed_by or not is_authorized_hotkey(cursor, signed_by):
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "ingest_organics",
+                        "request_id": request_id,
+                        "error": str("Unauthorized hotkey"),
+                        "traceback": f"Unauthorized hotkey: {signed_by}",
+                        "type": "error_log",
+                    }
+                )
+                raise HTTPException(
+                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
+                )
+            cursor.executemany(
+                """
+                INSERT INTO organic_requests (
+                    request_endpoint, 
+                    temperature, 
+                    max_tokens, 
+                    seed, 
+                    model, 
+                    total_tokens, 
+                    hotkey, 
+                    coldkey, 
+                    uid, 
+                    verified, 
+                    time_to_first_token, 
+                    time_for_all_tokens,
+                    total_time,
+                    tps,
+                    error,
+                    cause,
+                    th_pub_id
+                    ) 
+                VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        md.endpoint,
+                        md.temperature,
+                        md.max_tokens,
+                        md.seed,
+                        md.model,
+                        md.total_tokens,
+                        md.hotkey,
+                        md.coldkey,
+                        md.uid,
+                        md.verified,
+                        md.time_to_first_token,
+                        md.time_for_all_tokens,
+                        md.total_time,
+                        md.tps,
+                        md.error,
+                        md.cause,
+                        md.pub_id,
+                    )
+                    for md in payload.organics
+                ],
+            )
+
+            targon_stats_db.commit()
+            return "", 200
+
+        except Exception as e:
+            targon_stats_db.rollback()
+            error_traceback = traceback.format_exc()
             logger.error(
                 {
                     "service": "targon-pacifico",
-                    "endpoint": "ingest_organics",
+                    "endpoint": "ingest",
                     "request_id": request_id,
-                    "error": str("Unauthorized hotkey"),
-                    "traceback": f"Unauthorized hotkey: {signed_by}",
+                    "error": str(e),
+                    "traceback": error_traceback,
                     "type": "error_log",
                 }
             )
             raise HTTPException(
-                status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
+                status_code=500,
+                detail=f"[{request_id}] Internal Server Error: Could not insert responses/requests. {str(e)}",
             )
-        cursor.executemany(
-            """
-            INSERT INTO organic_requests (
-                request_endpoint, 
-                temperature, 
-                max_tokens, 
-                seed, 
-                model, 
-                total_tokens, 
-                hotkey, 
-                coldkey, 
-                uid, 
-                verified, 
-                time_to_first_token, 
-                time_for_all_tokens,
-                total_time,
-                tps,
-                error,
-                cause,
-                th_pub_id
-                ) 
-            VALUES ( %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            [
-                (
-                    md.endpoint,
-                    md.temperature,
-                    md.max_tokens,
-                    md.seed,
-                    md.model,
-                    md.total_tokens,
-                    md.hotkey,
-                    md.coldkey,
-                    md.uid,
-                    md.verified,
-                    md.time_to_first_token,
-                    md.time_for_all_tokens,
-                    md.total_time,
-                    md.tps,
-                    md.error,
-                    md.cause,
-                    md.pub_id,
-                )
-                for md in payload.organics
-            ],
-        )
-
-        targon_stats_db.commit()
-        return "", 200
-
-    except Exception as e:
-        targon_stats_db.rollback()
-        error_traceback = traceback.format_exc()
-        logger.error(
-            {
-                "service": "targon-pacifico",
-                "endpoint": "ingest",
-                "request_id": request_id,
-                "error": str(e),
-                "traceback": error_traceback,
-                "type": "error_log",
-            }
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"[{request_id}] Internal Server Error: Could not insert responses/requests. {str(e)}",
-        )
-    finally:
-        cursor.close()
 
 
 @app.post("/")
@@ -461,9 +459,9 @@ async def ingest(request: Request):
 @app.post("/mongo")
 async def ingest_mongo(request: Request):
     logger.info("Start POST /mongo")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
     try:
-        now = round(time.time() * 1000)
-        request_id = generate(size=6)
         body = await request.body()
         json_data = await request.json()
 
@@ -500,22 +498,22 @@ async def ingest_mongo(request: Request):
             )
             raise HTTPException(status_code=400, detail=str(err))
 
-        cursor = None
-        cursor = targon_stats_db.cursor()
-        if not is_authorized_hotkey(cursor, signed_by):
-            logger.error(
-                {
-                    "service": "targon-pacifico",
-                    "endpoint": "mongo",
-                    "request_id": request_id,
-                    "error": "Unauthorized hotkey",
-                    "traceback": f"Unauthorized hotkey: {signed_by}",
-                    "type": "error_log",
-                }
-            )
-            raise HTTPException(
-                status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
-            )
+        targon_stats_db.ping()
+        with targon_stats_db.cursor() as cursor:
+            if not is_authorized_hotkey(cursor, signed_by):
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "mongo",
+                        "request_id": request_id,
+                        "error": "Unauthorized hotkey",
+                        "traceback": f"Unauthorized hotkey: {signed_by}",
+                        "type": "error_log",
+                    }
+                )
+                raise HTTPException(
+                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
+                )
 
         # Convert input to list if it's not already
         documents = json_data if isinstance(json_data, list) else [json_data]
@@ -575,9 +573,6 @@ async def ingest_mongo(request: Request):
             status_code=500,
             detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}",
         )
-    finally:
-        if cursor:
-            cursor.close()
 
 
 # Exegestor endpoint
