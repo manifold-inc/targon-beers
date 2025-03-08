@@ -461,46 +461,46 @@ async def ingest(request: Request):
 @app.post("/mongo")
 async def ingest_mongo(request: Request):
     logger.info("Start POST /mongo")
-    now = round(time.time() * 1000)
-    request_id = generate(size=6)
-    body = await request.body()
-    json_data = await request.json()
-
-    # Extract signature information from headers
-    timestamp = request.headers.get("Epistula-Timestamp", "")
-    uuid = request.headers.get("Epistula-Uuid", "")
-    signed_by = request.headers.get("Epistula-Signed-By", "")
-    signature = request.headers.get("Epistula-Request-Signature", "")
-    service = request.headers.get("X-Targon-Service", "")
-
-    # First determine if this is a targon-hub-api request
-    is_hub_request = service == "targon-hub-api"
-
-    # verify signature
-    err = verify_signature(
-        signature=signature,
-        body=body,
-        timestamp=timestamp,
-        uuid=uuid,
-        signed_by=signed_by,
-        now=now,
-    )
-
-    if err:
-        logger.error(
-            {
-                "service": "targon-pacifico",
-                "endpoint": "mongo",
-                "request_id": request_id,
-                "error": str(err),
-                "traceback": "Signature verification failed",
-                "type": "error_log",
-            }
-        )
-        raise HTTPException(status_code=400, detail=str(err))
-
-    cursor = None
     try:
+        now = round(time.time() * 1000)
+        request_id = generate(size=6)
+        body = await request.body()
+        json_data = await request.json()
+
+        # Extract signature information from headers
+        timestamp = request.headers.get("Epistula-Timestamp", "")
+        uuid = request.headers.get("Epistula-Uuid", "")
+        signed_by = request.headers.get("Epistula-Signed-By", "")
+        signature = request.headers.get("Epistula-Request-Signature", "")
+        service = request.headers.get("X-Targon-Service", "")
+
+        # First determine if this is a targon-hub-api request
+        is_hub_request = service == "targon-hub-api"
+
+        # verify signature
+        err = verify_signature(
+            signature=signature,
+            body=body,
+            timestamp=timestamp,
+            uuid=uuid,
+            signed_by=signed_by,
+            now=now,
+        )
+
+        if err:
+            logger.error(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "mongo",
+                    "request_id": request_id,
+                    "error": str(err),
+                    "traceback": "Signature verification failed",
+                    "type": "error_log",
+                }
+            )
+            raise HTTPException(status_code=400, detail=str(err))
+
+        cursor = None
         cursor = targon_stats_db.cursor()
         if not is_authorized_hotkey(cursor, signed_by):
             logger.error(
