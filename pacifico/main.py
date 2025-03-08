@@ -507,17 +507,43 @@ async def get_organic_metadata(request: Request):
                     status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
                 )
 
-        # TODO @sarokhan
-        # Return type needs to contain atleast the following
+
+        # query mongo for global and miner data
+        global_doc = mongo_db.find_one({"uid": -1})
+        miner_docs = mongo_db.find({"uid": {"$ne": -1}})
+
+        # initialize repsonse
         metadata = {
             "total_attempted": 0,
-            "miners": {"1": {"success_rate": 0.5, "completed": 100}},
+            "miners": {},
         }
-        # Global data is under uid -1, just poke around the mongo db via compass
-        # You may need to compute the miner's completed field, i think i store
-        # it as an array in mongo. just sum the array, its a sliding window
-        result = mongo_db  # get data from mongo
 
+        if global_doc is not None and "targon-hub-api" in global_doc:
+            global_data = global_doc.get("targon-hub-api", {}).get("api", {})
+            metadata["total_attempted"] = global_data.get("totalAttemptedWindow", 0)
+            
+
+        # iterate over miner docs for sums
+        for doc in miner_docs:
+            uid = str(doc.get("uid"))
+
+            # get api data
+            api_data = doc.get("targon-hub-api", {}).get("api", {})
+
+            if api_data is not None:
+                avg_success_rate = api_data.get("avgSuccessRate", 0)
+                completed_window = api_data.get("completedOverTime", [])
+
+                # Calculate the sum of the completed_window array
+                completed_sum = sum(completed_window) if completed_window else 0
+                
+                # Add miner data to response
+                metadata["miners"][uid] = {
+                    "success_rate": avg_success_rate,
+                    "completed": completed_sum,  
+                }
+
+        return metadata
     except Exception as e:
         error_traceback = traceback.format_exc()
         logger.error(
