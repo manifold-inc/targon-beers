@@ -217,7 +217,7 @@ async def ingest_organics(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(status_code=400, detail=str(err))
+        return {"detail": str(err)}, 400
 
     with targon_stats_db.cursor() as cursor:
         try:
@@ -234,9 +234,7 @@ async def ingest_organics(request: Request):
                         "type": "error_log",
                     }
                 )
-                raise HTTPException(
-                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
-                )
+                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
             cursor.executemany(
                 """
                 INSERT INTO organic_requests (
@@ -300,10 +298,7 @@ async def ingest_organics(request: Request):
                     "type": "error_log",
                 }
             )
-            raise HTTPException(
-                status_code=500,
-                detail=f"[{request_id}] Internal Server Error: Could not insert responses/requests. {str(e)}",
-            )
+            return {"detail": "Internal Server Error"}, 500
 
 
 @app.post("/")
@@ -341,7 +336,7 @@ async def ingest(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(status_code=400, detail=str(err))
+        return {"detail": str(err)}, 400
 
     cursor = targon_stats_db.cursor()
     try:
@@ -358,9 +353,7 @@ async def ingest(request: Request):
                     "type": "error_log",
                 }
             )
-            raise HTTPException(
-                status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
-            )
+            return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
         cursor.executemany(
             """
             INSERT INTO miner_response (r_nanoid, hotkey, coldkey, uid, verified, time_to_first_token, time_for_all_tokens, total_time, tokens, tps, error, cause) 
@@ -447,10 +440,7 @@ async def ingest(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"[{request_id}] Internal Server Error: Could not insert responses/requests. {str(e)}",
-        )
+        return {"detail": "Internal Server Error"}, 500
     finally:
         cursor.close()
 
@@ -488,7 +478,7 @@ async def get_organic_metadata(request: Request):
                     "type": "error_log",
                 }
             )
-            raise HTTPException(status_code=400, detail=str(err))
+            return {"detail": str(err)}, 400
 
         targon_stats_db.ping()
         with targon_stats_db.cursor() as cursor:
@@ -503,9 +493,7 @@ async def get_organic_metadata(request: Request):
                         "type": "error_log",
                     }
                 )
-                raise HTTPException(
-                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
-                )
+                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
 
         # query mongo for global and miner data
         global_doc = mongo_db.find_one({"uid": -1})
@@ -557,10 +545,7 @@ async def get_organic_metadata(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}",
-        )
+        return {"detail": "Internal Server Error"}, 500
 
 
 # Ingest Mongo DB
@@ -604,7 +589,7 @@ async def ingest_mongo(request: Request):
                     "type": "error_log",
                 }
             )
-            raise HTTPException(status_code=400, detail=str(err))
+            return {"detail": str(err)}, 400
 
         targon_stats_db.ping()
         with targon_stats_db.cursor() as cursor:
@@ -619,9 +604,7 @@ async def ingest_mongo(request: Request):
                         "type": "error_log",
                     }
                 )
-                raise HTTPException(
-                    status_code=401, detail=f"Unauthorized hotkey: {signed_by}"
-                )
+                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
 
         # Convert input to list if it's not already
         documents = json_data if isinstance(json_data, list) else [json_data]
@@ -632,9 +615,7 @@ async def ingest_mongo(request: Request):
         for doc in documents:
             uid = doc.get("uid")
             if uid == None:
-                raise HTTPException(
-                    status_code=400, detail="Missing uid in json input."
-                )
+                return {"detail": "Missing uid in json input"}, 400
             updates = {"last_updated": now}
             for key, value in doc.get("data", {}).items():
                 updates[f"{mongo_key}.{key}"] = value
@@ -677,10 +658,7 @@ async def ingest_mongo(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(
-            status_code=500,
-            detail=f"[{request_id}] Internal Server Error: Could not insert data. {str(e)}",
-        )
+        return {"detail": "Internal Server Error"}, 500
 
 
 # Exegestor endpoint
@@ -721,7 +699,7 @@ async def exgest(request: Request):
                         "type": "error_log",
                     }
                 )
-                raise HTTPException(status_code=400, detail=str(err))
+                return {"detail": str(err)}, 400
 
         async with cache_lock:  # Acquire the lock - other threads must wait here
             cached_buckets = cache.get("buckets")
@@ -810,10 +788,7 @@ async def exgest(request: Request):
                             "type": "error_log",
                         }
                     )
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Internal Server Error: Could not fetch responses. {str(e)}",
-                    )
+                    return {"detail": "Internal Server Error"}, 500
                 finally:
                     cursor.close()
 
@@ -836,9 +811,7 @@ async def exgest(request: Request):
                 "type": "error_log",
             }
         )
-        raise HTTPException(
-            status_code=400, detail=f"Invalid JSON in request body: {str(e)}"
-        )
+        return {"detail": "Invalid JSON in request body"}, 400
 
 
 @app.get("/ping")
