@@ -22,7 +22,7 @@ db = pymysql.connect(
 
 def delete_old_records():
     try:
-        # Get current date and calculate first day of current month (March 2024)
+        # Get current date and calculate first day of current month (March 2025)
         current_date = datetime.datetime.now()
         first_day_of_month = datetime.datetime(current_date.year, current_date.month, 1)
         
