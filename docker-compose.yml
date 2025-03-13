@@ -18,6 +18,15 @@ services:
       mongodb:
         condition: service_healthy
 
+  budlight:
+    image: manifoldlabs/targon-budlight
+    labels:
+      - vector.enable=true
+    build:
+      context: .
+      dockerfile: Dockerfile.budlight
+    env_file: .env
+
   modelo:
     image: manifoldlabs/targon-modelo
     labels:

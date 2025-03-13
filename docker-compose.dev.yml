@@ -18,7 +18,11 @@ services:
     platform: linux/arm64
     labels:
       - vector.enable=false
-
+    
+  budlight:
+    platform: linux/arm64
+    labels:
+      - vector.enable=false
   corona:
     platform: linux/arm64
     labels:
