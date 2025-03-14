@@ -32,7 +32,7 @@ def delete_old_records():
         cursor = db.cursor()
         
         # Set batch size to a much smaller value
-        batch_size = 10
+        batch_size = 500
         total_deleted = 0
         
         # Delete in batches until no more records match
