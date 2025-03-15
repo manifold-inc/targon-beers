@@ -25,6 +25,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.budlight
+      platforms:
+        - linux/amd64
+        - linux/arm64
     env_file: .env
 
   modelo:
