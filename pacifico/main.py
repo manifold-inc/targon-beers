@@ -716,7 +716,7 @@ async def exgest(request: Request):
                 bucket_id = "b_" + generate(alphabet=alphabet, size=14)
                 try:
                     all_records = []
-                    for i in range(1, 11):
+                    for i in range(1, 21):  # 200 records
                         cursor.execute(
                             """
                             SELECT id, request, response, uid, hotkey, coldkey, endpoint, success, total_time, time_to_first_token, response_tokens, model_name, pub_id
