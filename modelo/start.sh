@@ -14,11 +14,8 @@ fi
 # Export environment variables to /etc/environment
 printenv > /etc/environment
 
-# Find the path to the Python interpreter
-PYTHON_PATH=$(which python)
-
-# Set up the cron job to run the Python script at 12:30 AM every night
-echo "30 00 * * * cd /app && $PYTHON_PATH main.py >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
+# Set up the cron job to run the Go application at 12:30 AM every night
+echo "30 00 * * * cd /app && /app/modelo >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
 
 # Set the correct permissions for the cron file
 chmod 0644 /etc/cron.d/modelo_cron
