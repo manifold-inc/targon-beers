@@ -8,7 +8,6 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/joho/godotenv"
 	"github.com/planetscale/planetscale-go/planetscale"
 	"go.uber.org/zap"
 )
@@ -20,7 +19,6 @@ var (
 )
 
 func init() {
-	// Initialize logger
 	zapLogger, err := zap.NewProduction()
 	if err != nil {
 		panic("Failed to get logger")
@@ -28,15 +26,6 @@ func init() {
 	logger = zapLogger.Sugar()
 	defer zapLogger.Sync()
 
-	// Load environment variables
-	err = godotenv.Load()
-	if err != nil {
-		logger.Warnw("Failed to load .env file, using environment variables",
-			"error", err,
-		)
-	}
-
-	// Initialize MySQL connection using DSN from environment
 	db, err = sql.Open("mysql", os.Getenv("DSN"))
 	if err != nil {
 		logger.Fatalw("Failed to connect to database",
@@ -44,12 +33,12 @@ func init() {
 		)
 	}
 
-	// Configure connection pool
+	// connection pool
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(10)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	// Verify connection with timeout
+	// timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
@@ -59,7 +48,6 @@ func init() {
 	}
 	logger.Info("Successfully connected to PlanetScale database")
 
-	// Initialize PlanetScale API client
 	pscaleClient, err = planetscale.NewClient(
 		planetscale.WithServiceToken(
 			os.Getenv("PLANETSCALE_TOKEN_ID"),
@@ -211,13 +199,12 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		"total_records", totalDeleted,
 	)
 
-	// Create a new branch for space reclamation
 	branchName := fmt.Sprintf("cleanup-requests-%s-days-%s",
-		"2", // Number of days of data being deleted
+		"2",
 		time.Now().Format("20060102"),
 	)
 
-	// Create branch
+	// create branch
 	branch, err := pscaleClient.DatabaseBranches.Create(ctx, &planetscale.CreateDatabaseBranchRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -227,7 +214,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create branch: %v", err)
 	}
 
-	// Wait for branch to be ready with timeout
+	// wait for branch to be ready
 	branchCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -253,7 +240,15 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		}
 	}
 
-	// Create deploy request
+	// after the branch is ready but before creating the deploy request
+	alterQuery := fmt.Sprintf("ALTER TABLE request COMMENT 'Optimize table size via DR - %s';",
+		time.Now().Format("2006-01-02"))
+	_, err = db.ExecContext(ctx, alterQuery)
+	if err != nil {
+		return fmt.Errorf("failed to alter table comment: %v", err)
+	}
+
+	// create deploy request
 	deployReq, err := pscaleClient.DeployRequests.Create(ctx, &planetscale.CreateDeployRequestRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -265,7 +260,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create deploy request: %v", err)
 	}
 
-	// Wait for deploy request to be ready with timeout
+	// wait for deploy request to be ready
 	deployCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -291,7 +286,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		}
 	}
 
-	// Auto-apply the deploy request
+	// auto-apply the deploy request
 	_, err = pscaleClient.DeployRequests.AutoApplyDeploy(ctx, &planetscale.AutoApplyDeployRequestRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -312,7 +307,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (bool, error) {
 	logger.Info("Verifying recent backup exists before proceeding with deletions")
 
-	// List all backups
+	// list all backups
 	backups, err := pscaleClient.Backups.List(ctx, &planetscale.ListBackupsRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -322,64 +317,73 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 		return false, fmt.Errorf("failed to list backups: %v", err)
 	}
 
-	// Check if we have any backups
+	// check if we have any backups
 	if len(backups) == 0 {
 		logger.Warn("No backups found")
 		return false, nil
 	}
 
-	// Get current date for comparison
-	now := time.Now()
+	// get current date for comparison in UTC cause timezones are a pain
+	now := time.Now().UTC()
 	today := now.Format("2006-01-02")
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 
-	// First, check if today's backup is in progress or completed
+	logger.Infow("Checking for backups with dates",
+		"today_utc", today,
+		"yesterday_utc", yesterday,
+		"current_time_utc", now.Format("2006-01-02 15:04:05"),
+	)
+
 	var inProgressBackup *planetscale.Backup
 	var mostRecentBackup *planetscale.Backup
 
 	for _, backup := range backups {
-		backupDate := backup.CreatedAt.Format("2006-01-02")
+		backupDate := backup.CreatedAt.UTC().Format("2006-01-02")
 
-		// Check for today's backup
+		logger.Infow("Found backup",
+			"backup_id", backup.PublicID,
+			"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
+			"backup_date", backupDate,
+			"state", backup.State,
+			"size", backup.Size,
+		)
+
+		// check for backups before deleting
 		if backupDate == today {
-			if backup.State == "ready" {
-				// Today's backup is ready, we're good to proceed
+			if backup.State == "success" {
 				logger.Infow("Today's backup is complete",
 					"backup_id", backup.PublicID,
-					"created_at", backup.CreatedAt.Format("2006-01-02 15:04:05"),
+					"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 					"size", backup.Size,
 					"state", backup.State,
 				)
 				return true, nil
 			} else if backup.State == "running" || backup.State == "pending" {
-				// Today's backup is in progress
 				inProgressBackup = backup
 			}
 		}
 
-		// Keep track of the most recent backup (regardless of date)
 		if mostRecentBackup == nil || backup.CreatedAt.After(mostRecentBackup.CreatedAt) {
-			if backup.State == "ready" {
+			if backup.State == "success" {
 				mostRecentBackup = backup
 			}
 		}
 	}
 
-	// If today's backup is in progress, log it and check if yesterday's backup exists
+	// if today's backup is in progress, use yesterday's backup as fallback
 	if inProgressBackup != nil {
 		logger.Infow("Today's backup is still in progress",
 			"backup_id", inProgressBackup.PublicID,
-			"started_at", inProgressBackup.StartedAt.Format("2006-01-02 15:04:05"),
+			"started_at", inProgressBackup.StartedAt.UTC().Format("2006-01-02 15:04:05"),
 			"state", inProgressBackup.State,
 		)
 
-		// Check if we have yesterday's backup
 		for _, backup := range backups {
-			backupDate := backup.CreatedAt.Format("2006-01-02")
-			if backupDate == yesterday && backup.State == "ready" {
+			backupDate := backup.CreatedAt.UTC().Format("2006-01-02")
+			if backupDate == yesterday && backup.State == "success" {
 				logger.Infow("Using yesterday's backup as fallback",
 					"backup_id", backup.PublicID,
-					"created_at", backup.CreatedAt.Format("2006-01-02 15:04:05"),
+					"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 					"size", backup.Size,
 				)
 				return true, nil
@@ -387,13 +391,12 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 		}
 	}
 
-	// If we have a recent backup (within the last 48 hours), use that
 	if mostRecentBackup != nil {
 		hoursAgo := now.Sub(mostRecentBackup.CreatedAt).Hours()
 		if hoursAgo < 48 {
 			logger.Infow("Using recent backup",
 				"backup_id", mostRecentBackup.PublicID,
-				"created_at", mostRecentBackup.CreatedAt.Format("2006-01-02 15:04:05"),
+				"created_at", mostRecentBackup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				"size", mostRecentBackup.Size,
 				"hours_ago", fmt.Sprintf("%.1f", hoursAgo),
 			)
@@ -406,60 +409,42 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 }
 
 func main() {
-	// Create a parent context with timeout for the entire operation
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Track overall success
-	var hasErrors bool
-
-	// Run cleanup tasks
 	if err := calculateAndInsertDailyStats(ctx, logger); err != nil {
 		logger.Errorw("Error calculating daily stats",
 			"error", err,
 		)
-		hasErrors = true
 	}
 
 	if err := disableExpiredModels(ctx, logger); err != nil {
 		logger.Errorw("Error disabling expired models",
 			"error", err,
 		)
-		hasErrors = true
 	}
 
-	// Verify recent backup exists before proceeding with deletions
 	hasRecentBackup, err := verifyRecentBackupExists(ctx, logger)
 	if err != nil {
 		logger.Errorw("Error verifying recent backup",
 			"error", err,
 		)
-		hasErrors = true
 	} else if !hasRecentBackup {
 		logger.Warn("Skipping deletion because no recent backup was found")
 	} else {
-		// Only delete old data if a recent backup exists
 		if err := deleteOldRequests(ctx, logger); err != nil {
 			logger.Errorw("Error deleting old requests",
 				"error", err,
 			)
-			hasErrors = true
 		}
 	}
 
-	// Close connections
+	// close connections
 	if err := db.Close(); err != nil {
 		logger.Errorw("Error closing database connection", "error", err)
-		hasErrors = true
 	}
 
 	if err := logger.Sync(); err != nil {
 		fmt.Printf("Error syncing logger: %v\n", err)
-		hasErrors = true
-	}
-
-	// Exit with error code if any operation failed
-	if hasErrors {
-		os.Exit(1)
 	}
 }
