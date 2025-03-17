@@ -157,6 +157,79 @@ func disableExpiredModels(ctx context.Context, logger *zap.SugaredLogger) error 
 	return nil
 }
 
+func waitForBranchReady(ctx context.Context, logger *zap.SugaredLogger, branchName string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for branch to be ready")
+		default:
+			branch, err := pscaleClient.DatabaseBranches.Get(ctx, &planetscale.GetDatabaseBranchRequest{
+				Organization: os.Getenv("PLANETSCALE_ORG"),
+				Database:     os.Getenv("PLANETSCALE_DATABASE"),
+				Branch:       branchName,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to check branch status: %v", err)
+			}
+
+			if branch.Ready {
+				return nil
+			}
+
+			logger.Infow("Waiting for branch to be ready",
+				"branch", branchName,
+				"status", branch.Ready,
+			)
+
+			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
+func waitForDeployRequest(ctx context.Context, logger *zap.SugaredLogger, deployReq *planetscale.DeployRequest, branchName string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for deploy request")
+		default:
+			status, err := pscaleClient.DeployRequests.Get(ctx, &planetscale.GetDeployRequestRequest{
+				Organization: os.Getenv("PLANETSCALE_ORG"),
+				Database:     os.Getenv("PLANETSCALE_DATABASE"),
+				Number:       deployReq.Number,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to check deploy status: %v", err)
+			}
+
+			switch status.State {
+			case "complete":
+				return nil
+			case "canceled", "error":
+				logger.Errorw("Deploy request failed",
+					"state", status.State,
+					"branch", branchName,
+					"deploy_number", deployReq.Number,
+				)
+				return fmt.Errorf("deploy request failed with state: %s", status.State)
+			case "pending":
+				logger.Infow("Waiting for deploy request",
+					"branch", branchName,
+					"deploy_number", deployReq.Number,
+					"state", status.State,
+				)
+				time.Sleep(5 * time.Second)
+			default:
+				logger.Warnw("Unknown deploy request state",
+					"state", status.State,
+					"branch", branchName,
+					"deploy_number", deployReq.Number,
+				)
+				time.Sleep(5 * time.Second)
+			}
+		}
+	}
+}
+
 func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 	currentDate := time.Now().Format("2006-01-02")
 	logger.Infow("Starting to delete old request records",
@@ -203,7 +276,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		time.Now().Format("20060102"),
 	)
 
-	branch, err := pscaleClient.DatabaseBranches.Create(ctx, &planetscale.CreateDatabaseBranchRequest{
+	_, err := pscaleClient.DatabaseBranches.Create(ctx, &planetscale.CreateDatabaseBranchRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
 		Name:         branchName,
@@ -212,29 +285,11 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create branch: %v", err)
 	}
 
-	branchCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	branchCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 
-	for !branch.Ready {
-		select {
-		case <-branchCtx.Done():
-			return fmt.Errorf("timeout waiting for branch to be ready")
-		default:
-			logger.Infow("Waiting for branch to be ready",
-				"branch", branchName,
-				"status", branch.Ready,
-			)
-			time.Sleep(5 * time.Second)
-
-			branch, err = pscaleClient.DatabaseBranches.Get(ctx, &planetscale.GetDatabaseBranchRequest{
-				Organization: os.Getenv("PLANETSCALE_ORG"),
-				Database:     os.Getenv("PLANETSCALE_DATABASE"),
-				Branch:       branchName,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to check branch status: %v", err)
-			}
-		}
+	if err := waitForBranchReady(branchCtx, logger, branchName); err != nil {
+		return err
 	}
 
 	password, err := pscaleClient.Passwords.Create(ctx, &planetscale.DatabaseBranchPasswordRequest{
@@ -279,7 +334,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 	alterQuery := fmt.Sprintf("ALTER TABLE request COMMENT 'Optimize table size via DR - %s';",
 		time.Now().Format("2006-01-02"))
 
-	alterCtx, alterCancel := context.WithTimeout(ctx, 2*time.Minute)
+	alterCtx, alterCancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer alterCancel()
 
 	_, err = branchDB.ExecContext(alterCtx, alterQuery)
@@ -325,86 +380,21 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create deploy request: %v", err)
 	}
 
-	deployCtx, deployCancel := context.WithTimeout(ctx, 5*time.Minute)
+	deployCtx, deployCancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer deployCancel()
 
-	for deployReq.State == "pending" {
-		select {
-		case <-deployCtx.Done():
-			return fmt.Errorf("timeout waiting for deploy request to be ready")
-		default:
-			logger.Infow("Waiting for deploy request to be ready",
-				"request_number", deployReq.Number,
-				"state", deployReq.State,
-			)
-			time.Sleep(5 * time.Second)
-
-			deployReq, err = pscaleClient.DeployRequests.Get(ctx, &planetscale.GetDeployRequestRequest{
-				Organization: os.Getenv("PLANETSCALE_ORG"),
-				Database:     os.Getenv("PLANETSCALE_DATABASE"),
-				Number:       deployReq.Number,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to check deploy request status: %v", err)
-			}
-		}
+	if err := waitForDeployRequest(deployCtx, logger, deployReq, branchName); err != nil {
+		return err
 	}
 
-	_, err = pscaleClient.DeployRequests.AutoApplyDeploy(ctx, &planetscale.AutoApplyDeployRequestRequest{
-		Organization: os.Getenv("PLANETSCALE_ORG"),
-		Database:     os.Getenv("PLANETSCALE_DATABASE"),
-		Number:       deployReq.Number,
-		Enable:       true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to auto-apply deploy request: %v", err)
-	}
-
-	logger.Infow("Created and auto-applied deploy request",
-		"request_number", deployReq.Number,
-		"branch", branchName,
-	)
-
-	for {
-		deployStatus, err := pscaleClient.DeployRequests.Get(ctx, &planetscale.GetDeployRequestRequest{
-			Organization: os.Getenv("PLANETSCALE_ORG"),
-			Database:     os.Getenv("PLANETSCALE_DATABASE"),
-			Number:       deployReq.Number,
-		})
-		if err != nil {
-			logger.Warnw("Failed to check deploy request status, skipping branch deletion",
-				"error", err,
-				"branch", branchName,
-			)
-			return nil
-		}
-
-		if deployStatus.State == "complete" {
-			break
-		}
-
-		if deployStatus.State == "canceled" || deployStatus.State == "error" {
-			logger.Warnw("Deploy request ended in a non-successful state, proceeding with branch cleanup",
-				"state", deployStatus.State,
-				"branch", branchName,
-			)
-			break
-		}
-
-		logger.Infow("Waiting for deploy to complete before deleting branch",
-			"branch", branchName,
-			"deploy_status", deployStatus.State,
-		)
-		time.Sleep(10 * time.Second)
-	}
-
+	// Only proceed with branch deletion if deploy was successful
 	err = pscaleClient.DatabaseBranches.Delete(ctx, &planetscale.DeleteDatabaseBranchRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
 		Branch:       branchName,
 	})
 	if err != nil {
-		logger.Warnw("Failed to delete branch after deploy",
+		logger.Warnw("Failed to delete branch after successful deploy",
 			"error", err,
 			"branch", branchName,
 		)
@@ -517,7 +507,7 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
 	if err := calculateAndInsertDailyStats(ctx, logger); err != nil {
