@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	db           *sql.DB
+	db *sql.DB
+
 	pscaleClient *planetscale.Client
 	logger       *zap.SugaredLogger
 )
@@ -24,7 +25,11 @@ func init() {
 		panic("Failed to get logger")
 	}
 	logger = zapLogger.Sugar()
-	defer zapLogger.Sync()
+	defer func() {
+		if syncErr := logger.Sync(); syncErr != nil {
+			logger.Warnw("Failed to sync logger", "error", syncErr)
+		}
+	}()
 
 	db, err = sql.Open("mysql", os.Getenv("DSN"))
 	if err != nil {
@@ -33,7 +38,6 @@ func init() {
 		)
 	}
 
-	// timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
@@ -199,7 +203,6 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		time.Now().Format("20060102"),
 	)
 
-	// create branch
 	branch, err := pscaleClient.DatabaseBranches.Create(ctx, &planetscale.CreateDatabaseBranchRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -209,7 +212,6 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create branch: %v", err)
 	}
 
-	// wait for branch to be ready
 	branchCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -235,15 +237,83 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		}
 	}
 
-	// after the branch is ready but before creating the deploy request
-	alterQuery := fmt.Sprintf("ALTER TABLE request COMMENT 'Optimize table size via DR - %s';",
-		time.Now().Format("2006-01-02"))
-	_, err = db.ExecContext(ctx, alterQuery)
+	password, err := pscaleClient.Passwords.Create(ctx, &planetscale.DatabaseBranchPasswordRequest{
+		Organization: os.Getenv("PLANETSCALE_ORG"),
+		Database:     os.Getenv("PLANETSCALE_DATABASE"),
+		Branch:       branchName,
+		DisplayName:  fmt.Sprintf("cleanup-temp-%s", time.Now().Format("20060102150405")),
+	})
 	if err != nil {
-		return fmt.Errorf("failed to alter table comment: %v", err)
+		return fmt.Errorf("failed to create branch password: %v", err)
 	}
 
-	// create deploy request
+	logger.Infow("Created branch password",
+		"branch", branchName,
+		"password_id", password.PublicID,
+		"username", password.Username,
+		"role", password.Role,
+	)
+
+	dbName := os.Getenv("PLANETSCALE_DATABASE")
+	branchDSN := password.ConnectionStrings.Go
+
+	logger.Infow("Connecting to branch database",
+		"branch", branchName,
+		"connection_string", branchDSN,
+		"database", dbName,
+		"username", password.Username,
+	)
+
+	branchDB, err := sql.Open("mysql", branchDSN)
+	if err != nil {
+		return fmt.Errorf("failed to connect to branch: %v", err)
+	}
+	defer branchDB.Close()
+
+	pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer pingCancel()
+	if err = branchDB.PingContext(pingCtx); err != nil {
+		return fmt.Errorf("failed to ping branch database: %v", err)
+	}
+
+	alterQuery := fmt.Sprintf("ALTER TABLE request COMMENT 'Optimize table size via DR - %s';",
+		time.Now().Format("2006-01-02"))
+
+	alterCtx, alterCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer alterCancel()
+
+	_, err = branchDB.ExecContext(alterCtx, alterQuery)
+	if err != nil {
+		return fmt.Errorf("failed to alter table comment on branch: %v", err)
+	}
+
+	logger.Infow("Executed ALTER TABLE on branch",
+		"branch", branchName,
+		"query", alterQuery,
+	)
+
+	defer func() {
+		err := pscaleClient.Passwords.Delete(ctx, &planetscale.DeleteDatabaseBranchPasswordRequest{
+			Organization: os.Getenv("PLANETSCALE_ORG"),
+			Database:     os.Getenv("PLANETSCALE_DATABASE"),
+			Branch:       branchName,
+			PasswordId:   password.PublicID,
+		})
+
+		if err != nil {
+			logger.Warnw("Failed to delete temporary branch password",
+				"error", err,
+				"branch", branchName,
+				"password_id", password.PublicID,
+			)
+		} else {
+			logger.Infow("Cleaned up temporary branch password",
+				"branch", branchName,
+				"password_id", password.PublicID,
+			)
+		}
+	}()
+
 	deployReq, err := pscaleClient.DeployRequests.Create(ctx, &planetscale.CreateDeployRequestRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -255,9 +325,8 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create deploy request: %v", err)
 	}
 
-	// wait for deploy request to be ready
-	deployCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
+	deployCtx, deployCancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer deployCancel()
 
 	for deployReq.State == "pending" {
 		select {
@@ -281,7 +350,6 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		}
 	}
 
-	// auto-apply the deploy request
 	_, err = pscaleClient.DeployRequests.AutoApplyDeploy(ctx, &planetscale.AutoApplyDeployRequestRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -296,13 +364,62 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		"request_number", deployReq.Number,
 		"branch", branchName,
 	)
+
+	for {
+		deployStatus, err := pscaleClient.DeployRequests.Get(ctx, &planetscale.GetDeployRequestRequest{
+			Organization: os.Getenv("PLANETSCALE_ORG"),
+			Database:     os.Getenv("PLANETSCALE_DATABASE"),
+			Number:       deployReq.Number,
+		})
+		if err != nil {
+			logger.Warnw("Failed to check deploy request status, skipping branch deletion",
+				"error", err,
+				"branch", branchName,
+			)
+			return nil
+		}
+
+		if deployStatus.State == "complete" {
+			break
+		}
+
+		if deployStatus.State == "canceled" || deployStatus.State == "error" {
+			logger.Warnw("Deploy request ended in a non-successful state, proceeding with branch cleanup",
+				"state", deployStatus.State,
+				"branch", branchName,
+			)
+			break
+		}
+
+		logger.Infow("Waiting for deploy to complete before deleting branch",
+			"branch", branchName,
+			"deploy_status", deployStatus.State,
+		)
+		time.Sleep(10 * time.Second)
+	}
+
+	err = pscaleClient.DatabaseBranches.Delete(ctx, &planetscale.DeleteDatabaseBranchRequest{
+		Organization: os.Getenv("PLANETSCALE_ORG"),
+		Database:     os.Getenv("PLANETSCALE_DATABASE"),
+		Branch:       branchName,
+	})
+	if err != nil {
+		logger.Warnw("Failed to delete branch after deploy",
+			"error", err,
+			"branch", branchName,
+		)
+	} else {
+		logger.Infow("Successfully deleted branch after deploy",
+			"branch", branchName,
+		)
+	}
+
 	return nil
 }
 
 func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (bool, error) {
 	logger.Info("Verifying recent backup exists before proceeding with deletions")
 
-	// list all backups
 	backups, err := pscaleClient.Backups.List(ctx, &planetscale.ListBackupsRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
@@ -312,13 +429,11 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 		return false, fmt.Errorf("failed to list backups: %v", err)
 	}
 
-	// check if we have any backups
 	if len(backups) == 0 {
 		logger.Warn("No backups found")
 		return false, nil
 	}
 
-	// get current date for comparison in UTC cause timezones are a pain
 	now := time.Now().UTC()
 	today := now.Format("2006-01-02")
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
@@ -343,7 +458,6 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 			"size", backup.Size,
 		)
 
-		// check for backups before deleting
 		if backupDate == today {
 			if backup.State == "success" {
 				logger.Infow("Today's backup is complete",
@@ -365,7 +479,6 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 		}
 	}
 
-	// if today's backup is in progress, use yesterday's backup as fallback
 	if inProgressBackup != nil {
 		logger.Infow("Today's backup is still in progress",
 			"backup_id", inProgressBackup.PublicID,
@@ -434,12 +547,7 @@ func main() {
 		}
 	}
 
-	// close connections
 	if err := db.Close(); err != nil {
 		logger.Errorw("Error closing database connection", "error", err)
-	}
-
-	if err := logger.Sync(); err != nil {
-		fmt.Printf("Error syncing logger: %v\n", err)
 	}
 }
