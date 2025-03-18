@@ -814,6 +814,141 @@ async def exgest(request: Request):
         return {"detail": "Invalid JSON in request body"}, 400
 
 
+@app.get("/organic-stats")
+async def get_organic_stats(request: Request):
+    logger.info("Start GET /organic-stats")
+    now = round(time.time() * 1000)
+    request_id = generate(size=6)
+    try:
+        # Extract signature information from headers
+        timestamp = request.headers.get("Epistula-Timestamp", "")
+        uuid = request.headers.get("Epistula-Uuid", "")
+        signed_by = request.headers.get("Epistula-Signed-By", "")
+        signature = request.headers.get("Epistula-Request-Signature", "")
+
+        # verify signature
+        err = verify_signature(
+            signature=signature,
+            body=b"",
+            timestamp=timestamp,
+            uuid=uuid,
+            signed_by=signed_by,
+            now=now,
+        )
+
+        if err:
+            logger.error(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "organic-stats",
+                    "request_id": request_id,
+                    "error": str(err),
+                    "traceback": "Signature verification failed",
+                    "type": "error_log",
+                }
+            )
+            return {"detail": str(err)}, 400
+
+        targon_stats_db.ping()
+        with targon_stats_db.cursor() as cursor:
+            if not is_authorized_hotkey(cursor, signed_by):
+                logger.error(
+                    {
+                        "service": "targon-pacifico",
+                        "endpoint": "organic-stats",
+                        "request_id": request_id,
+                        "error": "Unauthorized hotkey",
+                        "traceback": f"Unauthorized hotkey: {signed_by}",
+                        "type": "error_log",
+                    }
+                )
+                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+
+            result = {}
+            
+            # Query for verification percentages based on last 100 requests per UID
+            cursor.execute(
+                """
+                WITH ranked_requests AS (
+                    SELECT 
+                        uid, 
+                        verified,
+                        ROW_NUMBER() OVER (PARTITION BY uid ORDER BY id DESC) as row_num
+                    FROM organic_requests
+                    WHERE uid BETWEEN 0 AND 255
+                )
+                SELECT 
+                    uid, 
+                    SUM(CASE WHEN verified = TRUE THEN 1 ELSE 0 END) as verified_count,
+                    COUNT(*) as total_count
+                FROM ranked_requests
+                WHERE row_num <= 100
+                GROUP BY uid
+                """
+            )
+            
+            percentage_records = cursor.fetchall()
+            
+            for record in percentage_records:
+                uid_str = str(record[0])
+                verified_percentage = (record[1] / record[2]) * 100 if record[2] > 0 else 0
+                
+                result[uid_str] = {
+                    "tps_values": [],
+                    "verified_percentage": round(verified_percentage, 2)
+                }
+            
+            # Query for TPS values of last 100 verified requests
+            cursor.execute(
+                """
+                WITH ranked_verified_requests AS (
+                    SELECT 
+                        uid, 
+                        tps,
+                        ROW_NUMBER() OVER (PARTITION BY uid ORDER BY id DESC) as row_num
+                    FROM organic_requests
+                    WHERE verified = TRUE
+                )
+                SELECT 
+                    uid, 
+                    JSON_ARRAYAGG(tps) as tps_values
+                FROM ranked_verified_requests
+                WHERE row_num <= 100
+                GROUP BY uid
+                """
+            )
+            
+            tps_records = cursor.fetchall()
+            
+            for record in tps_records:
+                uid_str = str(record[0])
+                tps_values = json.loads(record[1])
+                
+
+                if uid_str not in result:
+                    result[uid_str] = {
+                        "tps_values": [],
+                        "verified_percentage": 0.0
+                    }
+                
+                result[uid_str]["tps_values"] = tps_values
+            
+            return result
+            
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        logger.error(
+            {
+                "service": "targon-pacifico",
+                "endpoint": "organic-stats",
+                "request_id": request_id,
+                "error": str(e),
+                "traceback": error_traceback,
+                "type": "error_log",
+            }
+        )
+        return {"detail": "Internal Server Error"}, 500
+
 @app.get("/ping")
 def ping():
     return "pong", 200
