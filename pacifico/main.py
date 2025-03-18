@@ -890,15 +890,15 @@ async def get_organic_stats(request: Request):
             percentage_records = cursor.fetchall()
             
             for record in percentage_records:
-                uid_str = str(record[0])  # uid
-                verified_percentage = (record[1] / record[2]) * 100 if record[2] > 0 else 0  # verified_count / total_count
+                uid_str = str(record[0])
+                verified_percentage = (record[1] / record[2]) * 100 if record[2] > 0 else 0
                 
                 result[uid_str] = {
                     "tps_values": [],
                     "verified_percentage": round(verified_percentage, 2)
                 }
             
-            # Query for TPS values of last 100 verified requests per UID
+            # Query for TPS values of last 100 verified requests
             cursor.execute(
                 """
                 WITH ranked_verified_requests AS (
@@ -908,11 +908,13 @@ async def get_organic_stats(request: Request):
                         ROW_NUMBER() OVER (PARTITION BY uid ORDER BY id DESC) as row_num
                     FROM organic_requests
                     WHERE uid BETWEEN 0 AND 255 AND verified = TRUE
+                    AND row_num <= 100
                 )
-                SELECT uid, tps
+                SELECT 
+                    uid, 
+                    JSON_ARRAYAGG(tps) as tps_values
                 FROM ranked_verified_requests
-                WHERE row_num <= 100
-                ORDER BY uid, row_num
+                GROUP BY uid
                 """
             )
             
@@ -920,14 +922,16 @@ async def get_organic_stats(request: Request):
             
             for record in tps_records:
                 uid_str = str(record[0])
+                tps_values = json.loads(record[1])
                 
+
                 if uid_str not in result:
                     result[uid_str] = {
                         "tps_values": [],
                         "verified_percentage": 0.0
                     }
                 
-                result[uid_str]["tps_values"].append(record[1])  # tps
+                result[uid_str]["tps_values"] = tps_values
             
             return result
             
