@@ -507,7 +507,7 @@ func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (b
 }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
 
 	if err := calculateAndInsertDailyStats(ctx, logger); err != nil {
