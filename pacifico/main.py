@@ -815,7 +815,7 @@ async def exgest(request: Request):
 
 
 @app.get("/organic-stats")
-async def get_uid_stats(request: Request):
+async def get_organic_stats(request: Request):
     logger.info("Start GET /organic-stats")
     now = round(time.time() * 1000)
     request_id = generate(size=6)
