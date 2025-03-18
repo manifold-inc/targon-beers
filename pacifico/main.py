@@ -907,13 +907,13 @@ async def get_organic_stats(request: Request):
                         tps,
                         ROW_NUMBER() OVER (PARTITION BY uid ORDER BY id DESC) as row_num
                     FROM organic_requests
-                    WHERE uid BETWEEN 0 AND 255 AND verified = TRUE
-                    AND row_num <= 100
+                    WHERE verified = TRUE
                 )
                 SELECT 
                     uid, 
                     JSON_ARRAYAGG(tps) as tps_values
                 FROM ranked_verified_requests
+                WHERE row_num <= 100
                 GROUP BY uid
                 """
             )
