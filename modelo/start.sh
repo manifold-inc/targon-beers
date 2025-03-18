@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/bin/sh
 
-# Start the cron service
-service cron start
+# Start the cron daemon in the background
+crond -b
 
 # Ensure that cron is running
-if service cron status; then
+if pgrep crond > /dev/null; then
     echo "Modelo cron service started successfully."
 else
     echo "Failed to start cron service."
@@ -14,11 +14,11 @@ fi
 # Export environment variables to /etc/environment
 printenv > /etc/environment
 
-# Find the path to the Python interpreter
-PYTHON_PATH=$(which python)
+# Create cron.d directory if it doesn't exist
+mkdir -p /etc/cron.d
 
-# Set up the cron job to run the Python script at 12:30 AM every night
-echo "30 00 * * * cd /app && $PYTHON_PATH main.py >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
+# Set up the cron job to run the Go application at 2:00 AM every night
+echo "00 02 * * * cd /app && /app/modelo >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
 
 # Set the correct permissions for the cron file
 chmod 0644 /etc/cron.d/modelo_cron

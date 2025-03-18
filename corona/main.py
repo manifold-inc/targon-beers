@@ -95,6 +95,7 @@ def calculate_and_insert_organic_daily_stats():
 
 if __name__ == "__main__":
     try:
-        organic_stats_success = calculate_and_insert_organic_daily_stats()
+        calculate_and_insert_organic_daily_stats()
+        update_validator_hotkeys()
     finally:
         db.close()
