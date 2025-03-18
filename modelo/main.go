@@ -101,7 +101,7 @@ func calculateAndInsertDailyStats(ctx context.Context, logger *zap.SugaredLogger
 	for rows.Next() {
 		var modelName string
 		var totalTokens int64
-		var createdAt time.Time
+		var createdAt string
 		var avgTps float64
 
 		if err := rows.Scan(&modelName, &totalTokens, &createdAt, &avgTps); err != nil {
@@ -115,7 +115,7 @@ func calculateAndInsertDailyStats(ctx context.Context, logger *zap.SugaredLogger
 
 		logger.Infow("Inserted daily stats",
 			"model", modelName,
-			"date", createdAt.Format("2006-01-02"),
+			"date", createdAt,
 			"tokens", totalTokens,
 			"avg_tps", avgTps,
 		)
