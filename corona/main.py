@@ -39,7 +39,7 @@ def update_validator_hotkeys():
                     # For new validators, use "Unknown Validator" as default name
                     # For existing validators, only update the timestamp
                     query = """
-                    INSERT INTO validators (hotkey, vali_name, last_updated)
+                    INSERT INTO validator (hotkey, vali_name, last_updated)
                     VALUES (%s, %s, NOW())
                     ON DUPLICATE KEY UPDATE 
                         last_updated = NOW()
