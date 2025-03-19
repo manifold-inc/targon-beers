@@ -437,14 +437,13 @@ func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld 
 		cutoffDate,
 	)
 
-	// open file
+	// Open file
 	file, err := os.Create(parquetFilePath)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create file: %v", err)
 	}
 	defer file.Close()
 
-	// define struct to hold records
 	type RequestArchive struct {
 		PubID     string `parquet:"pub_id"`
 		Request   []byte `parquet:"request"`
@@ -452,52 +451,89 @@ func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld 
 		ModelName string `parquet:"model_name"`
 	}
 
-	// create parquet writer
+	// Create parquet writer
 	writer := parquet.NewWriter(file)
-	defer writer.Close()
+	defer func() {
+		if err := writer.Close(); err != nil {
+			logger.Errorw("Failed to close parquet writer", "error", err)
+		}
+	}()
 
 	totalArchived := 0
+	query := `
+		SELECT pub_id, request, response, model_name
+		FROM request 
+		WHERE created_at < DATE_SUB(CURDATE(), INTERVAL ? DAY)
+		AND response IS NOT NULL
+		LIMIT ?
+	`
 
-	// Fetch and write records in batches
+	// Process data in batches
 	for {
-		rows, err := db.QueryContext(ctx, `
-			SELECT pub_id, request, response, model_name
-			FROM request 
-			WHERE created_at < DATE_SUB(CURDATE(), INTERVAL ? DAY)
-			AND response IS NOT NULL
-			LIMIT ?
-		`, daysOld, batchSize)
+		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 
+		// Query the database for a batch of records
+		rows, err := db.QueryContext(queryCtx, query, daysOld, batchSize)
 		if err != nil {
+			cancel()
 			return parquetFilePath, totalArchived, fmt.Errorf("failed to query records: %v", err)
 		}
 
-		records := make([]RequestArchive, 0, batchSize)
-		count := 0
+		// Check if there are any rows before we start processing
+		hasRows := rows.Next()
+		if !hasRows {
+			rows.Close()
+			cancel()
+			logger.Info("No more records to archive, finished")
+			break
+		}
 
+		var records []RequestArchive
+		recordCount := 0
+
+		// Process the first row we already advanced to
+		var record RequestArchive
+		if err := rows.Scan(&record.PubID, &record.Request, &record.Response, &record.ModelName); err != nil {
+			rows.Close()
+			cancel()
+			return parquetFilePath, totalArchived, fmt.Errorf("failed to scan record: %v", err)
+		}
+		records = append(records, record)
+		recordCount++
+
+		// Process remaining rows
 		for rows.Next() {
 			var record RequestArchive
 			if err := rows.Scan(&record.PubID, &record.Request, &record.Response, &record.ModelName); err != nil {
 				rows.Close()
+				cancel()
 				return parquetFilePath, totalArchived, fmt.Errorf("failed to scan record: %v", err)
 			}
 			records = append(records, record)
-			count++
+			recordCount++
 		}
+
+		// Check for errors during rows iteration
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			cancel()
+			return parquetFilePath, totalArchived, fmt.Errorf("error during rows iteration: %v", err)
+		}
+
 		rows.Close()
+		cancel()
 
-		if count == 0 {
-			break
-		}
-
+		// Write the whole batch at once
 		if err := writer.Write(records); err != nil {
-			return parquetFilePath, totalArchived, fmt.Errorf("failed to write to parquet: %v", err)
+			return parquetFilePath, totalArchived, fmt.Errorf("failed to write batch to parquet: %v", err)
 		}
 
-		totalArchived += count
-		logger.Infow("Archived batch of records", "batch_size", count, "total", totalArchived)
+		totalArchived += recordCount
+		logger.Infow("Archived batch of records", "batch_size", recordCount, "total", totalArchived)
 
-		if count < batchSize {
+		// If fewer records than the batch size were found, we've reached the end
+		if recordCount < batchSize {
+			logger.Info("Reached the end of records to archive")
 			break
 		}
 	}
@@ -565,7 +601,7 @@ func main() {
 
 	// Configuration for data retention
 	daysToRetain := 2
-	archiveBatchSize := 1000
+	archiveBatchSize := 100
 	deleteBatchSize := 100
 
 	// archive old requests
