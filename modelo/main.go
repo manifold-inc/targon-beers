@@ -236,7 +236,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		"date", currentDate,
 	)
 
-	batchSize := 500
+	batchSize := 100
 	totalDeleted := int64(0)
 
 	for {
