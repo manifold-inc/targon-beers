@@ -451,11 +451,15 @@ func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld 
 		ModelName string `parquet:"model_name"`
 	}
 
-	// Create parquet writer
-	writer := parquet.NewWriter(file)
+	// Create parquet writer using GenericWriter with RequestArchive type
+	writer := parquet.NewGenericWriter[RequestArchive](file)
+	// Make sure writer is properly closed when function returns
 	defer func() {
+		logger.Info("Closing parquet writer")
 		if err := writer.Close(); err != nil {
 			logger.Errorw("Failed to close parquet writer", "error", err)
+		} else {
+			logger.Info("Successfully closed parquet writer")
 		}
 	}()
 
@@ -523,13 +527,20 @@ func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld 
 		rows.Close()
 		cancel()
 
-		// Write the whole batch at once
-		if err := writer.Write(records); err != nil {
+		// Write the batch of records at once using GenericWriter
+		if _, err := writer.Write(records); err != nil {
 			return parquetFilePath, totalArchived, fmt.Errorf("failed to write batch to parquet: %v", err)
 		}
 
 		totalArchived += recordCount
 		logger.Infow("Archived batch of records", "batch_size", recordCount, "total", totalArchived)
+
+		// Flush the writer periodically after each batch to ensure data is written
+		if flushErr := writer.Flush(); flushErr != nil {
+			logger.Warnw("Failed to flush writer", "error", flushErr)
+		} else {
+			logger.Infow("Successfully flushed batch to disk", "batch_size", recordCount)
+		}
 
 		// If fewer records than the batch size were found, we've reached the end
 		if recordCount < batchSize {
@@ -624,7 +635,7 @@ func main() {
 		"archive_path", archivePath,
 	)
 
-	// verify archive before deleting
+	// verify archive before deletings
 	archiveValid, verifyErr := verifyArchiveIntegrity(logger, archivePath, totalArchived)
 	if verifyErr != nil {
 		logger.Errorw("Error verifying archive integrity - skipping deletion",
@@ -645,7 +656,6 @@ func main() {
 		return
 	}
 
-	// delete records
 	if err := deleteOldRequests(ctx, logger, daysToRetain, deleteBatchSize); err != nil {
 		logger.Errorw("Error deleting old requests",
 			"error", err,
