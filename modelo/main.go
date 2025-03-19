@@ -483,29 +483,10 @@ func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld 
 			return parquetFilePath, totalArchived, fmt.Errorf("failed to query records: %v", err)
 		}
 
-		// Check if there are any rows before we start processing
-		hasRows := rows.Next()
-		if !hasRows {
-			rows.Close()
-			cancel()
-			logger.Info("No more records to archive, finished")
-			break
-		}
-
 		var records []RequestArchive
 		recordCount := 0
 
-		// Process the first row we already advanced to
-		var record RequestArchive
-		if err := rows.Scan(&record.PubID, &record.Request, &record.Response, &record.ModelName); err != nil {
-			rows.Close()
-			cancel()
-			return parquetFilePath, totalArchived, fmt.Errorf("failed to scan record: %v", err)
-		}
-		records = append(records, record)
-		recordCount++
-
-		// Process remaining rows
+		// process rows
 		for rows.Next() {
 			var record RequestArchive
 			if err := rows.Scan(&record.PubID, &record.Request, &record.Response, &record.ModelName); err != nil {
