@@ -26,6 +26,8 @@ services:
       context: .
       dockerfile: Dockerfile.modelo
     env_file: .env
+    volumes:
+      - modelo_archives:/data/archives
 
   corona:
     image: manifoldlabs/targon-corona
@@ -87,3 +89,4 @@ networks:
 volumes:
   traefik-public-certificates:
   mongodb_data:
+  modelo_archives:
