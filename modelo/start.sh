@@ -17,8 +17,8 @@ printenv > /etc/environment
 # Create cron.d directory if it doesn't exist
 mkdir -p /etc/cron.d
 
-# Set up the cron job to run the Go application immediately
-echo "* * * * * cd /app && /app/modelo >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
+# Set up the cron job to run the Go application at 3:25 AM UTC
+echo "25 03 * * * cd /app && /app/modelo >> /var/log/cron.log 2>&1" > /etc/cron.d/modelo_cron
 
 # Set the correct permissions for the cron file
 chmod 0644 /etc/cron.d/modelo_cron
