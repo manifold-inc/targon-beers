@@ -1,11 +1,12 @@
 module modelo
 
-go 1.21
+go 1.23.2
+
+toolchain go1.23.7
 
 require (
 	github.com/go-sql-driver/mysql v1.9.0
-	github.com/joho/godotenv v1.5.1
-	github.com/planetscale/planetscale-go v0.74.0
+	github.com/planetscale/planetscale-go v0.126.3
 	go.uber.org/zap v1.27.0
 )
 
@@ -16,7 +17,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/net v0.0.0-20200822124328-c89045814202 // indirect
-	golang.org/x/oauth2 v0.0.0-20201208152858-08078c50e5b5 // indirect
+	golang.org/x/oauth2 v0.28.0 // indirect
 	google.golang.org/appengine v1.6.6 // indirect
 	google.golang.org/protobuf v1.25.0 // indirect
 )
