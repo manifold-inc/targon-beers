@@ -302,7 +302,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld i
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
 		Branch:       branchName,
-		DisplayName:  fmt.Sprintf("cleanup-temp-%s", time.Now().Format("20060102150405")),
+		Name:         fmt.Sprintf("cleanup-temp-%s", time.Now().Format("20060102150405")),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create branch password: %v", err)
@@ -316,13 +316,17 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld i
 	)
 
 	dbName := os.Getenv("PLANETSCALE_DATABASE")
-	branchDSN := password.ConnectionStrings.Go
+	branchDSN := fmt.Sprintf("%s:%s@tcp(%s)/%s?tls=true&interpolateParams=true",
+		password.Username,
+		password.PlainText,
+		password.Hostname,
+		dbName)
 
 	logger.Infow("Connecting to branch database",
 		"branch", branchName,
-		"connection_string", branchDSN,
 		"database", dbName,
 		"username", password.Username,
+		"hostname", password.Hostname,
 	)
 
 	branchDB, err := sql.Open("mysql", branchDSN)
