@@ -147,6 +147,8 @@ mongo_db_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
 mongo_host = os.getenv("MONGO_HOST", "mongodb")
 mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
 
+allowed_ip = os.getenv("ALLOWED_IP", "127.0.0.1")
+
 try:
     mongo_client = MongoClient(mongo_uri)
     # Test the connection
@@ -569,26 +571,26 @@ async def ingest_mongo(request: Request):
 
         # First determine if this is a targon-hub-api request
         is_hub_request = service == "targon-hub-api"
+
+        # Get client IP information
+        client_host = request.client.host if request.client else "unknown"
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
         
-        # Log detailed information for targon-hub-api requests
-        if is_hub_request:
-            client_host = request.client.host if request.client else "unknown"
-            forwarded_for = request.headers.get("X-Forwarded-For", "")
-            instance_id = request.headers.get("X-Instance-ID", "unknown")
-            
+        # Check if the request is coming from the allowed IP
+        if is_hub_request and forwarded_for != allowed_ip:
             logger.info(
                 {
                     "service": "targon-pacifico",
                     "endpoint": "mongo",
                     "request_id": request_id,
-                    "type": "targon_hub_api_request",
                     "client_ip": client_host,
                     "x_forwarded_for": forwarded_for,
-                    "instance_id": instance_id,
-                    "data": json.dumps(json_data)
+                    "type": "unauthorized_ip_access",
+                    "message": f"Unauthorized IP attempted to access endpoint: {forwarded_for}"
                 }
             )
-
+            return {"detail": "Access forbidden from this IP address"}, 403
+        
         # verify signature
         err = verify_signature(
             signature=signature,
