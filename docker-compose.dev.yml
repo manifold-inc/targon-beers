@@ -18,6 +18,8 @@ services:
     platform: linux/arm64
     labels:
       - vector.enable=false
+    volumes:
+      - modelo_archives:/data/archives
   corona:
     platform: linux/arm64
     labels:
@@ -64,3 +66,4 @@ networks:
 volumes:
   traefik-public-certificates:
   mongodb_data:
+  modelo_archives:
