@@ -556,21 +556,6 @@ async def ingest_mongo(request: Request):
     now = round(time.time() * 1000)
     request_id = generate(size=6)
     
-    client_host = request.client.host if request.client else "unknown"
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    instance_id = request.headers.get("X-Instance-ID", "unknown")
-    logger.info(
-        {
-            "service": "targon-pacifico",
-            "endpoint": "mongo",
-            "request_id": request_id,
-            "client_ip": client_host,
-            "x_forwarded_for": forwarded_for,
-            "instance_id": instance_id,
-            "type": "info_log",
-        }
-    )
-    
     try:
         body = await request.body()
         json_data = await request.json()
@@ -584,6 +569,25 @@ async def ingest_mongo(request: Request):
 
         # First determine if this is a targon-hub-api request
         is_hub_request = service == "targon-hub-api"
+        
+        # Log detailed information for targon-hub-api requests
+        if is_hub_request:
+            client_host = request.client.host if request.client else "unknown"
+            forwarded_for = request.headers.get("X-Forwarded-For", "")
+            instance_id = request.headers.get("X-Instance-ID", "unknown")
+            
+            logger.info(
+                {
+                    "service": "targon-pacifico",
+                    "endpoint": "mongo",
+                    "request_id": request_id,
+                    "type": "targon_hub_api_request",
+                    "client_ip": client_host,
+                    "x_forwarded_for": forwarded_for,
+                    "instance_id": instance_id,
+                    "data": json.dumps(json_data)
+                }
+            )
 
         # verify signature
         err = verify_signature(
