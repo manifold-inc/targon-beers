@@ -555,6 +555,22 @@ async def ingest_mongo(request: Request):
     logger.info("Start POST /mongo")
     now = round(time.time() * 1000)
     request_id = generate(size=6)
+    
+    client_host = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    instance_id = request.headers.get("X-Instance-ID", "unknown")
+    logger.info(
+        {
+            "service": "targon-pacifico",
+            "endpoint": "mongo",
+            "request_id": request_id,
+            "client_ip": client_host,
+            "x_forwarded_for": forwarded_for,
+            "instance_id": instance_id,
+            "type": "info_log",
+        }
+    )
+    
     try:
         body = await request.body()
         json_data = await request.json()
