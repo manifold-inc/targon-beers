@@ -117,6 +117,10 @@ def is_authorized_hotkey(cursor, signed_by: str) -> bool:
     return cursor.fetchone() is not None
 
 
+def is_authorized_targon_hub_api(cursor, signed_by: str) -> bool:
+    cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s AND verified_api = TRUE", (signed_by,))
+    return cursor.fetchone() is not None
+
 # Global variables for bucket management
 current_bucket = CurrentBucket()
 
@@ -146,8 +150,6 @@ password = os.getenv("MONGO_INITDB_ROOT_PASSWORD", "password")
 mongo_db_db = os.getenv("MONGO_INITDB_DATABASE", "targon")
 mongo_host = os.getenv("MONGO_HOST", "mongodb")
 mongo_uri = f"mongodb://{username}:{password}@{mongo_host}:27017/{mongo_db_db}?authSource=admin&authMechanism=SCRAM-SHA-256"
-
-allowed_ip = os.getenv("ALLOWED_IP", "127.0.0.1")
 
 try:
     mongo_client = MongoClient(mongo_uri)
@@ -455,10 +457,10 @@ async def get_organic_metadata(request: Request):
     request_id = generate(size=6)
     try:
         # Extract signature information from headers
-        timestamp = request.headers.get("Epistula-Timestamp", "")
-        uuid = request.headers.get("Epistula-Uuid", "")
-        signed_by = request.headers.get("Epistula-Signed-By", "")
-        signature = request.headers.get("Epistula-Request-Signature", "")
+        timestamp = request.headers.get("Epistula-Timestamp")
+        uuid = request.headers.get("Epistula-Uuid")
+        signed_by = request.headers.get("Epistula-Signed-By")
+        signature = request.headers.get("Epistula-Request-Signature")
 
         # verify signature
         err = verify_signature(
@@ -571,32 +573,6 @@ async def ingest_mongo(request: Request):
 
         # First determine if this is a targon-hub-api request
         is_hub_request = service == "targon-hub-api"
-
-        # Get client IP information
-        client_host = request.client.host if request.client else "unknown"
-        forwarded_for = request.headers.get("X-Forwarded-For", "")
-        
-        # Check if the request is coming from the allowed IP
-        if is_hub_request and forwarded_for != allowed_ip:
-            logger.info(
-                {
-                    "service": "targon-pacifico",
-                    "endpoint": "mongo",
-                    "request_id": request_id,
-                    "client_ip": client_host,
-                    "x_forwarded_for": forwarded_for,
-                    "signature": {
-                        "timestamp": timestamp,
-                        "uuid": uuid,
-                        "signed_by": signed_by,
-                        "signature": signature,
-                        "service": service,
-                    },
-                    "type": "unauthorized_ip_access",
-                    "message": f"Unauthorized IP attempted to access endpoint: {forwarded_for}"
-                }
-            )
-            return {"detail": "Access forbidden from this IP address"}, 403
         
         # verify signature
         err = verify_signature(
@@ -623,56 +599,80 @@ async def ingest_mongo(request: Request):
 
         targon_stats_db.ping()
         with targon_stats_db.cursor() as cursor:
-            if not is_authorized_hotkey(cursor, signed_by):
-                logger.error(
+            # For targon-hub-api requests, check if authorized
+            if is_hub_request:
+                if not is_authorized_targon_hub_api(cursor, signed_by):
+                    logger.error(
+                        {
+                            "service": "targon-pacifico",
+                            "endpoint": "mongo",
+                            "request_id": request_id,
+                            "error": "Unauthorized hotkey attempted to access targon-hub-api",
+                            "traceback": f"Unauthorized hotkey: {signed_by}",
+                            "signature_info": {
+                                "timestamp": timestamp,
+                                "uuid": uuid,
+                                "signed_by": signed_by,
+                                "signature_present": signature is not None,
+                                "service": service,
+                            },
+                            "body": json_data,
+                            "type": "error_log",
+                        }
+                    )
+                    return {"detail": f"Unauthorized manifold hotkey: {signed_by}."}, 401
+            # For non-hub requests, check if the hotkey is authorized
+            else:
+                if not is_authorized_hotkey(cursor, signed_by):
+                    logger.error(
+                        {
+                            "service": "targon-pacifico",
+                            "endpoint": "mongo",
+                            "request_id": request_id,
+                            "error": "Unauthorized hotkey",
+                            "traceback": f"Unauthorized hotkey: {signed_by}",
+                            "type": "error_log",
+                        }
+                    )
+                    return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+
+            # Convert input to list if it's not already
+            documents = json_data if isinstance(json_data, list) else [json_data]
+
+            # prepare bulk operations
+            mongo_key = "targon-hub-api" if is_hub_request else signed_by
+            bulk_operations = []
+            for doc in documents:
+                uid = doc.get("uid")
+                if uid == None:
+                    return {"detail": "Missing uid in json input"}, 400
+                updates = {"last_updated": now}
+                for key, value in doc.get("data", {}).items():
+                    updates[f"{mongo_key}.{key}"] = value
+
+                bulk_operations.append(
+                    UpdateOne(
+                        {"uid": uid},
+                        {"$set": updates},
+                        upsert=True,
+                    )
+                )
+
+            if bulk_operations:
+                result = mongo_db.bulk_write(bulk_operations, ordered=False)
+
+                logger.info(
                     {
                         "service": "targon-pacifico",
                         "endpoint": "mongo",
                         "request_id": request_id,
-                        "error": "Unauthorized hotkey",
-                        "traceback": f"Unauthorized hotkey: {signed_by}",
-                        "type": "error_log",
+                        "modified_count": result.modified_count,
+                        "upserted_count": result.upserted_count,
+                        "upserted_ids": result.upserted_ids,
+                        "matched_count": result.matched_count,
+                        "type": "info_log",
                     }
                 )
-                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
-
-        # Convert input to list if it's not already
-        documents = json_data if isinstance(json_data, list) else [json_data]
-
-        # prepare bulk operations
-        mongo_key = "targon-hub-api" if is_hub_request else signed_by
-        bulk_operations = []
-        for doc in documents:
-            uid = doc.get("uid")
-            if uid == None:
-                return {"detail": "Missing uid in json input"}, 400
-            updates = {"last_updated": now}
-            for key, value in doc.get("data", {}).items():
-                updates[f"{mongo_key}.{key}"] = value
-
-            bulk_operations.append(
-                UpdateOne(
-                    {"uid": uid},
-                    {"$set": updates},
-                    upsert=True,
-                )
-            )
-
-        if bulk_operations:
-            result = mongo_db.bulk_write(bulk_operations, ordered=False)
-
-            logger.info(
-                {
-                    "service": "targon-pacifico",
-                    "endpoint": "mongo",
-                    "request_id": request_id,
-                    "modified_count": result.modified_count,
-                    "upserted_count": result.upserted_count,
-                    "upserted_ids": result.upserted_ids,
-                    "matched_count": result.matched_count,
-                    "type": "info_log",
-                }
-            )
 
         return "", 200
 
