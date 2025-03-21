@@ -212,7 +212,14 @@ func waitForDeployRequest(ctx context.Context, logger *zap.SugaredLogger, deploy
 				)
 				return fmt.Errorf("deploy request failed with state: %s", status.State)
 			case "pending":
-				logger.Infow("Waiting for deploy request",
+				logger.Infow("Deploy request is pending",
+					"branch", branchName,
+					"deploy_number", deployReq.Number,
+					"state", status.State,
+				)
+				time.Sleep(5 * time.Second)
+			case "open":
+				logger.Infow("Deploy request is open",
 					"branch", branchName,
 					"deploy_number", deployReq.Number,
 					"state", status.State,
@@ -382,6 +389,15 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create deploy request: %v", err)
+	}
+
+	_, err = pscaleClient.DeployRequests.Deploy(ctx, &planetscale.PerformDeployRequest{
+		Organization: os.Getenv("PLANETSCALE_ORG"),
+		Database:     os.Getenv("PLANETSCALE_DATABASE"),
+		Number:       deployReq.Number,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to deploy request: %v", err)
 	}
 
 	deployCtx, deployCancel := context.WithTimeout(ctx, 30*time.Minute)
