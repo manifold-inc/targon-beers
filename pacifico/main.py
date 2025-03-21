@@ -563,11 +563,11 @@ async def ingest_mongo(request: Request):
         json_data = await request.json()
 
         # Extract signature information from headers
-        timestamp = request.headers.get("Epistula-Timestamp", "")
-        uuid = request.headers.get("Epistula-Uuid", "")
-        signed_by = request.headers.get("Epistula-Signed-By", "")
-        signature = request.headers.get("Epistula-Request-Signature", "")
-        service = request.headers.get("X-Targon-Service", "")
+        timestamp = request.headers.get("Epistula-Timestamp")
+        uuid = request.headers.get("Epistula-Uuid")
+        signed_by = request.headers.get("Epistula-Signed-By")
+        signature = request.headers.get("Epistula-Request-Signature")
+        service = request.headers.get("X-Targon-Service")
 
         # First determine if this is a targon-hub-api request
         is_hub_request = service == "targon-hub-api"
@@ -585,6 +585,13 @@ async def ingest_mongo(request: Request):
                     "request_id": request_id,
                     "client_ip": client_host,
                     "x_forwarded_for": forwarded_for,
+                    "signature": {
+                        "timestamp": timestamp,
+                        "uuid": uuid,
+                        "signed_by": signed_by,
+                        "signature": signature,
+                        "service": service,
+                    },
                     "type": "unauthorized_ip_access",
                     "message": f"Unauthorized IP attempted to access endpoint: {forwarded_for}"
                 }
@@ -844,10 +851,10 @@ async def get_organic_stats(request: Request):
     request_id = generate(size=6)
     try:
         # Extract signature information from headers
-        timestamp = request.headers.get("Epistula-Timestamp", "")
-        uuid = request.headers.get("Epistula-Uuid", "")
-        signed_by = request.headers.get("Epistula-Signed-By", "")
-        signature = request.headers.get("Epistula-Request-Signature", "")
+        timestamp = request.headers.get("Epistula-Timestamp")
+        uuid = request.headers.get("Epistula-Uuid")
+        signed_by = request.headers.get("Epistula-Signed-By")
+        signature = request.headers.get("Epistula-Request-Signature")
 
         # verify signature
         err = verify_signature(
