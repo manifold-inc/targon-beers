@@ -201,38 +201,33 @@ func waitForDeployRequest(ctx context.Context, logger *zap.SugaredLogger, deploy
 				return fmt.Errorf("failed to check deploy status: %v", err)
 			}
 
-			switch status.State {
-			case "complete":
+			// Log all the state information to debug
+			logger.Infow("Deploy request status",
+				"deploy_number", status.Number,
+				"state", status.State,
+				"deployment_state", status.DeploymentState,
+				"has_deployment", status.Deployment != nil,
+			)
+
+			// For successful completion, check for both "complete" DeploymentState AND "closed" State
+			if status.DeploymentState == "complete" && status.State == "closed" {
+				logger.Infow("Deploy request completed successfully",
+					"state", status.State,
+					"deployment_state", status.DeploymentState,
+					"branch", branchName,
+					"deploy_number", status.Number,
+				)
 				return nil
-			case "canceled", "error":
-				logger.Errorw("Deploy request failed",
-					"state", status.State,
-					"branch", branchName,
-					"deploy_number", deployReq.Number,
-				)
-				return fmt.Errorf("deploy request failed with state: %s", status.State)
-			case "pending":
-				logger.Infow("Deploy request is pending",
-					"branch", branchName,
-					"deploy_number", deployReq.Number,
-					"state", status.State,
-				)
-				time.Sleep(5 * time.Second)
-			case "open":
-				logger.Infow("Deploy request is open",
-					"branch", branchName,
-					"deploy_number", deployReq.Number,
-					"state", status.State,
-				)
-				time.Sleep(5 * time.Second)
-			default:
-				logger.Warnw("Unknown deploy request state",
-					"state", status.State,
-					"branch", branchName,
-					"deploy_number", deployReq.Number,
-				)
-				time.Sleep(5 * time.Second)
 			}
+
+			// If we get here, the deploy is still in progress
+			logger.Infow("Deploy request is in progress",
+				"state", status.State,
+				"deployment_state", status.DeploymentState,
+				"branch", branchName,
+				"deploy_number", status.Number,
+			)
+			time.Sleep(30 * time.Minute)
 		}
 	}
 }
@@ -400,7 +395,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to deploy request: %v", err)
 	}
 
-	deployCtx, deployCancel := context.WithTimeout(ctx, 30*time.Minute)
+	deployCtx, deployCancel := context.WithTimeout(ctx, 12*time.Hour)
 	defer deployCancel()
 
 	if err := waitForDeployRequest(deployCtx, logger, deployReq, branchName); err != nil {
