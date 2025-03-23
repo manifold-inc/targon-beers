@@ -26,7 +26,8 @@ services:
       context: .
       dockerfile: Dockerfile.modelo
     env_file: .env
-
+    volumes:
+      - ./data/archives:/data/archives
   corona:
     image: manifoldlabs/targon-corona
     labels:

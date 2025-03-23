@@ -8,6 +8,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/parquet-go/parquet-go"
 	"github.com/planetscale/planetscale-go/planetscale"
 	"go.uber.org/zap"
 )
@@ -232,21 +233,26 @@ func waitForDeployRequest(ctx context.Context, logger *zap.SugaredLogger, deploy
 	}
 }
 
-func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
+func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld int, batchSize int) error {
 	currentDate := time.Now().Format("2006-01-02")
+	// Calculate the date range for the data being deleted
+	cutoffDate := time.Now().AddDate(0, 0, -daysOld).Format("2006-01-02")
+
 	logger.Infow("Starting to delete old request records",
 		"date", currentDate,
+		"cutoff_date", cutoffDate,
+		"days_old", daysOld,
+		"batch_size", batchSize,
 	)
 
-	batchSize := 100
 	totalDeleted := int64(0)
 
 	for {
 		result, err := db.ExecContext(ctx, `
 			DELETE FROM request 
-			WHERE created_at < DATE_SUB(CURDATE(), INTERVAL 2 DAY)
+			WHERE created_at < DATE_SUB(CURDATE(), INTERVAL ? DAY)
 			LIMIT ?
-		`, batchSize)
+		`, daysOld, batchSize)
 		if err != nil {
 			return fmt.Errorf("failed to delete batch: %v", err)
 		}
@@ -273,8 +279,8 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		"total_records", totalDeleted,
 	)
 
-	branchName := fmt.Sprintf("cleanup-requests-%s-days-%s",
-		"2",
+	branchName := fmt.Sprintf("cleanup-requests-%d-days-%s",
+		daysOld,
 		time.Now().Format("20060102"),
 	)
 
@@ -380,7 +386,7 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
 		Branch:       branchName,
 		IntoBranch:   "main",
-		Notes:        fmt.Sprintf("Space reclamation after deleting %d request records older than 2 days", totalDeleted),
+		Notes:        fmt.Sprintf("Space reclamation after deleting %d request records older than %d days", totalDeleted, daysOld),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create deploy request: %v", err)
@@ -422,103 +428,166 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 	return nil
 }
 
-func verifyRecentBackupExists(ctx context.Context, logger *zap.SugaredLogger) (bool, error) {
-	logger.Info("Verifying recent backup exists before proceeding with deletions")
+// archiveOldRequests archives request records older than a specified number of days into a parquet file
+func archiveOldRequests(ctx context.Context, logger *zap.SugaredLogger, daysOld int, batchSize int) (string, int, error) {
+	currentDate := time.Now().Format("2006-01-02")
+	// Calculate the date range for the data being archived
+	cutoffDate := time.Now().AddDate(0, 0, -daysOld).Format("2006-01-02")
 
-	backups, err := pscaleClient.Backups.List(ctx, &planetscale.ListBackupsRequest{
-		Organization: os.Getenv("PLANETSCALE_ORG"),
-		Database:     os.Getenv("PLANETSCALE_DATABASE"),
-		Branch:       "main",
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to list backups: %v", err)
-	}
-
-	if len(backups) == 0 {
-		logger.Warn("No backups found")
-		return false, nil
-	}
-
-	now := time.Now().UTC()
-	today := now.Format("2006-01-02")
-	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-
-	logger.Infow("Checking for backups with dates",
-		"today_utc", today,
-		"yesterday_utc", yesterday,
-		"current_time_utc", now.Format("2006-01-02 15:04:05"),
+	logger.Infow("Starting to archive old request records",
+		"date", currentDate,
+		"cutoff_date", cutoffDate,
+		"days_old", daysOld,
+		"batch_size", batchSize,
 	)
 
-	var inProgressBackup *planetscale.Backup
-	var mostRecentBackup *planetscale.Backup
+	archivePath := "/data/archives"
+	if err := os.MkdirAll(archivePath, 0755); err != nil {
+		return "", 0, fmt.Errorf("failed to create archive directory: %v", err)
+	}
 
-	for _, backup := range backups {
-		backupDate := backup.CreatedAt.UTC().Format("2006-01-02")
+	// Create parquet file with precise date range in the filename
+	parquetFilePath := fmt.Sprintf("%s/requests_older_than_%s.parquet",
+		archivePath,
+		cutoffDate,
+	)
 
-		logger.Infow("Found backup",
-			"backup_id", backup.PublicID,
-			"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-			"backup_date", backupDate,
-			"state", backup.State,
-			"size", backup.Size,
-		)
+	// Open file
+	file, err := os.Create(parquetFilePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create file: %v", err)
+	}
+	defer file.Close()
 
-		if backupDate == today {
-			if backup.State == "success" {
-				logger.Infow("Today's backup is complete",
-					"backup_id", backup.PublicID,
-					"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-					"size", backup.Size,
-					"state", backup.State,
-				)
-				return true, nil
-			} else if backup.State == "running" || backup.State == "pending" {
-				inProgressBackup = backup
-			}
+	type RequestArchive struct {
+		PubID     string `parquet:"pub_id"`
+		Request   []byte `parquet:"request"`
+		Response  []byte `parquet:"response"`
+		ModelName string `parquet:"model_name"`
+	}
+
+	// Create parquet writer using GenericWriter with RequestArchive type
+	writer := parquet.NewGenericWriter[RequestArchive](file)
+	// Make sure writer is properly closed when function returns
+	defer func() {
+		logger.Info("Closing parquet writer")
+		if err := writer.Close(); err != nil {
+			logger.Errorw("Failed to close parquet writer", "error", err)
+		} else {
+			logger.Info("Successfully closed parquet writer")
+		}
+	}()
+
+	totalArchived := 0
+	query := `
+		SELECT pub_id, request, response, model_name
+		FROM request 
+		WHERE created_at < DATE_SUB(CURDATE(), INTERVAL ? DAY)
+		AND response IS NOT NULL
+		LIMIT ?
+	`
+
+	// Process data in batches
+	for {
+		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+
+		// Query the database for a batch of records
+		rows, err := db.QueryContext(queryCtx, query, daysOld, batchSize)
+		if err != nil {
+			cancel()
+			return parquetFilePath, totalArchived, fmt.Errorf("failed to query records: %v", err)
 		}
 
-		if mostRecentBackup == nil || backup.CreatedAt.After(mostRecentBackup.CreatedAt) {
-			if backup.State == "success" {
-				mostRecentBackup = backup
+		var records []RequestArchive
+		recordCount := 0
+
+		// process rows
+		for rows.Next() {
+			var record RequestArchive
+			if err := rows.Scan(&record.PubID, &record.Request, &record.Response, &record.ModelName); err != nil {
+				rows.Close()
+				cancel()
+				return parquetFilePath, totalArchived, fmt.Errorf("failed to scan record: %v", err)
 			}
+			records = append(records, record)
+			recordCount++
+		}
+
+		// Check for errors during rows iteration
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			cancel()
+			return parquetFilePath, totalArchived, fmt.Errorf("error during rows iteration: %v", err)
+		}
+
+		rows.Close()
+		cancel()
+
+		// Write the batch of records at once using GenericWriter
+		if _, err := writer.Write(records); err != nil {
+			return parquetFilePath, totalArchived, fmt.Errorf("failed to write batch to parquet: %v", err)
+		}
+
+		totalArchived += recordCount
+		logger.Infow("Archived batch of records", "batch_size", recordCount, "total", totalArchived)
+
+		// Flush the writer periodically after each batch to ensure data is written
+		if flushErr := writer.Flush(); flushErr != nil {
+			logger.Warnw("Failed to flush writer", "error", flushErr)
+		} else {
+			logger.Infow("Successfully flushed batch to disk", "batch_size", recordCount)
+		}
+
+		// If fewer records than the batch size were found, we've reached the end
+		if recordCount < batchSize {
+			logger.Info("Reached the end of records to archive")
+			break
 		}
 	}
 
-	if inProgressBackup != nil {
-		logger.Infow("Today's backup is still in progress",
-			"backup_id", inProgressBackup.PublicID,
-			"started_at", inProgressBackup.StartedAt.UTC().Format("2006-01-02 15:04:05"),
-			"state", inProgressBackup.State,
-		)
+	return parquetFilePath, totalArchived, nil
+}
 
-		for _, backup := range backups {
-			backupDate := backup.CreatedAt.UTC().Format("2006-01-02")
-			if backupDate == yesterday && backup.State == "success" {
-				logger.Infow("Using yesterday's backup as fallback",
-					"backup_id", backup.PublicID,
-					"created_at", backup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-					"size", backup.Size,
-				)
-				return true, nil
-			}
-		}
+// verifyArchiveIntegrity checks that the Parquet file is valid and contains the expected number of records
+func verifyArchiveIntegrity(logger *zap.SugaredLogger, filePath string, expectedCount int) (bool, error) {
+	logger.Infow("Verifying archive integrity",
+		"file_path", filePath,
+		"expected_count", expectedCount,
+	)
+
+	if expectedCount == 0 {
+		logger.Info("No records were archived, skipping verification")
+		return true, nil
 	}
 
-	if mostRecentBackup != nil {
-		hoursAgo := now.Sub(mostRecentBackup.CreatedAt).Hours()
-		if hoursAgo < 48 {
-			logger.Infow("Using recent backup",
-				"backup_id", mostRecentBackup.PublicID,
-				"created_at", mostRecentBackup.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-				"size", mostRecentBackup.Size,
-				"hours_ago", fmt.Sprintf("%.1f", hoursAgo),
-			)
-			return true, nil
-		}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open archive file for verification: %v", err)
+	}
+	defer file.Close()
+
+	// Read the Parquet file
+	reader := parquet.NewReader(file)
+	if reader == nil {
+		return false, fmt.Errorf("failed to create Parquet reader, reader is nil")
 	}
 
-	logger.Warn("No recent backups found within the last 48 hours")
-	return false, nil
+	// Get the number of rows
+	actualCount := reader.NumRows()
+
+	logger.Infow("Archive verification results",
+		"file_path", filePath,
+		"expected_count", expectedCount,
+		"actual_count", actualCount,
+	)
+
+	// Verify the row count matches what we expect
+	if int64(expectedCount) != actualCount {
+		return false, fmt.Errorf("archive integrity check failed: expected %d records, found %d",
+			expectedCount, actualCount)
+	}
+
+	return true, nil
 }
 
 func main() {
@@ -537,21 +606,59 @@ func main() {
 		)
 	}
 
-	hasRecentBackup, err := verifyRecentBackupExists(ctx, logger)
+	// Configuration for data retention
+	daysToRetain := 2
+	archiveBatchSize := 100
+	deleteBatchSize := 100
+
+	// archive old requests
+	archivePath, totalArchived, err := archiveOldRequests(ctx, logger, daysToRetain, archiveBatchSize)
 	if err != nil {
-		logger.Errorw("Error verifying recent backup",
+		logger.Errorw("Error archiving old requests - skipping deletion",
 			"error", err,
+			"archived_count", totalArchived,
+			"archive_path", archivePath,
 		)
-	} else if !hasRecentBackup {
-		logger.Warn("Skipping deletion because no recent backup was found")
-	} else {
-		if err := deleteOldRequests(ctx, logger); err != nil {
-			logger.Errorw("Error deleting old requests",
-				"error", err,
-			)
+		// Skip to database close since archiving failed
+		if err := db.Close(); err != nil {
+			logger.Errorw("Error closing database connection", "error", err)
 		}
+		return
 	}
 
+	logger.Infow("Successfully archived old requests",
+		"archived_count", totalArchived,
+		"archive_path", archivePath,
+	)
+
+	// verify archive before deletings
+	archiveValid, verifyErr := verifyArchiveIntegrity(logger, archivePath, totalArchived)
+	if verifyErr != nil {
+		logger.Errorw("Error verifying archive integrity - skipping deletion",
+			"error", verifyErr,
+			"archive_path", archivePath,
+		)
+		if err := db.Close(); err != nil {
+			logger.Errorw("Error closing database connection", "error", err)
+		}
+		return
+	}
+
+	if !archiveValid {
+		logger.Warn("Archive integrity check failed - skipping deletion")
+		if err := db.Close(); err != nil {
+			logger.Errorw("Error closing database connection", "error", err)
+		}
+		return
+	}
+
+	if err := deleteOldRequests(ctx, logger, daysToRetain, deleteBatchSize); err != nil {
+		logger.Errorw("Error deleting old requests",
+			"error", err,
+		)
+	}
+
+	// Close database connection
 	if err := db.Close(); err != nil {
 		logger.Errorw("Error closing database connection", "error", err)
 	}
