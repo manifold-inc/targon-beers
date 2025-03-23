@@ -386,6 +386,12 @@ func deleteOldRequests(ctx context.Context, logger *zap.SugaredLogger) error {
 		return fmt.Errorf("failed to create deploy request: %v", err)
 	}
 
+	logger.Infow("Waiting for deploy request validation before deploying",
+		"deploy_number", deployReq.Number,
+		"branch", branchName,
+		"wait_time", "5 minutes")
+	time.Sleep(5 * time.Minute)
+
 	_, err = pscaleClient.DeployRequests.Deploy(ctx, &planetscale.PerformDeployRequest{
 		Organization: os.Getenv("PLANETSCALE_ORG"),
 		Database:     os.Getenv("PLANETSCALE_DATABASE"),
