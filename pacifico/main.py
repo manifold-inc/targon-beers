@@ -905,7 +905,7 @@ async def get_organic_stats(request: Request):
                         verified,
                         ROW_NUMBER() OVER (PARTITION BY uid ORDER BY id DESC) as row_num
                     FROM organic_requests
-                    WHERE created_at >= NOW() - INTERVAL 4 HOUR
+                    WHERE created_at >= NOW() - INTERVAL 90 MINUTE
                 )
                 SELECT 
                     uid, 
