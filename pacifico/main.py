@@ -910,7 +910,10 @@ async def get_organic_stats(request: Request):
                     "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
                 }, 401
 
-            result = {}
+            result = {
+                str(i): {"tps_values": [], "verified_percentage": 100}
+                for i in range(256)
+            }
 
             # Query for verification percentages based on last 100 requests per UID
             cursor.execute(
