@@ -938,7 +938,7 @@ async def get_organic_stats(request: Request):
             for record in percentage_records:
                 uid_str = str(record[0])
                 verified_percentage = (
-                    (record[1] / record[2]) * 100 if record[2] > 0 else 1
+                    (record[1] / record[2]) * 100 if record[2] > 0 else 100
                 )
 
                 result[uid_str] = {
@@ -974,7 +974,7 @@ async def get_organic_stats(request: Request):
                 tps_values = json.loads(record[1])
 
                 if uid_str not in result:
-                    result[uid_str] = {"tps_values": [], "verified_percentage": 1}
+                    result[uid_str] = {"tps_values": [], "verified_percentage": 100}
 
                 result[uid_str]["tps_values"] = tps_values
 
