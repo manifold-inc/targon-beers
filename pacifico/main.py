@@ -118,8 +118,12 @@ def is_authorized_hotkey(cursor, signed_by: str) -> bool:
 
 
 def is_authorized_targon_hub_api(cursor, signed_by: str) -> bool:
-    cursor.execute("SELECT 1 FROM validator WHERE hotkey = %s AND verified_api = TRUE", (signed_by,))
+    cursor.execute(
+        "SELECT 1 FROM validator WHERE hotkey = %s AND verified_api = TRUE",
+        (signed_by,),
+    )
     return cursor.fetchone() is not None
+
 
 # Global variables for bucket management
 current_bucket = CurrentBucket()
@@ -238,7 +242,9 @@ async def ingest_organics(request: Request):
                         "type": "error_log",
                     }
                 )
-                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+                return {
+                    "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
+                }, 401
             cursor.executemany(
                 """
                 INSERT INTO organic_requests (
@@ -358,7 +364,9 @@ async def ingest(request: Request):
                     "type": "error_log",
                 }
             )
-            return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+            return {
+                "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
+            }, 401
         cursor.executemany(
             """
             INSERT INTO miner_response (r_nanoid, hotkey, coldkey, uid, verified, time_to_first_token, time_for_all_tokens, total_time, tokens, tps, error, cause) 
@@ -498,7 +506,9 @@ async def get_organic_metadata(request: Request):
                         "type": "error_log",
                     }
                 )
-                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+                return {
+                    "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
+                }, 401
 
         # query mongo for global and miner data
         global_doc = mongo_db.find_one({"uid": -1})
@@ -559,7 +569,7 @@ async def ingest_mongo(request: Request):
     logger.info("Start POST /mongo")
     now = round(time.time() * 1000)
     request_id = generate(size=6)
-    
+
     try:
         body = await request.body()
         json_data = await request.json()
@@ -573,7 +583,7 @@ async def ingest_mongo(request: Request):
 
         # First determine if this is a targon-hub-api request
         is_hub_request = service == "targon-hub-api"
-        
+
         # verify signature
         err = verify_signature(
             signature=signature,
@@ -620,7 +630,9 @@ async def ingest_mongo(request: Request):
                             "type": "error_log",
                         }
                     )
-                    return {"detail": f"Unauthorized manifold hotkey: {signed_by}."}, 401
+                    return {
+                        "detail": f"Unauthorized manifold hotkey: {signed_by}."
+                    }, 401
             # For non-hub requests, check if the hotkey is authorized
             else:
                 if not is_authorized_hotkey(cursor, signed_by):
@@ -634,7 +646,9 @@ async def ingest_mongo(request: Request):
                             "type": "error_log",
                         }
                     )
-                    return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+                    return {
+                        "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
+                    }, 401
 
             # Convert input to list if it's not already
             documents = json_data if isinstance(json_data, list) else [json_data]
@@ -892,10 +906,12 @@ async def get_organic_stats(request: Request):
                         "type": "error_log",
                     }
                 )
-                return {"detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."}, 401
+                return {
+                    "detail": f"Unauthorized hotkey: {signed_by}. Please contact the Targon team to add this validator hotkey."
+                }, 401
 
             result = {}
-            
+
             # Query for verification percentages based on last 100 requests per UID
             cursor.execute(
                 """
@@ -917,18 +933,19 @@ async def get_organic_stats(request: Request):
                 """
             )
 
-            
             percentage_records = cursor.fetchall()
-            
+
             for record in percentage_records:
                 uid_str = str(record[0])
-                verified_percentage = (record[1] / record[2]) * 100 if record[2] > 0 else 0
-                
+                verified_percentage = (
+                    (record[1] / record[2]) * 100 if record[2] > 0 else 1
+                )
+
                 result[uid_str] = {
                     "tps_values": [],
-                    "verified_percentage": round(verified_percentage, 2)
+                    "verified_percentage": round(verified_percentage, 2),
                 }
-            
+
             # Query for TPS values of last 100 verified requests
             cursor.execute(
                 """
@@ -949,24 +966,20 @@ async def get_organic_stats(request: Request):
                 GROUP BY uid
                 """
             )
-            
+
             tps_records = cursor.fetchall()
-            
+
             for record in tps_records:
                 uid_str = str(record[0])
                 tps_values = json.loads(record[1])
-                
 
                 if uid_str not in result:
-                    result[uid_str] = {
-                        "tps_values": [],
-                        "verified_percentage": 0.0
-                    }
-                
+                    result[uid_str] = {"tps_values": [], "verified_percentage": 1}
+
                 result[uid_str]["tps_values"] = tps_values
-            
+
             return result
-            
+
     except Exception as e:
         error_traceback = traceback.format_exc()
         logger.error(
@@ -980,6 +993,7 @@ async def get_organic_stats(request: Request):
             }
         )
         return {"detail": "Internal Server Error"}, 500
+
 
 @app.get("/ping")
 def ping():
