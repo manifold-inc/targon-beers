@@ -941,7 +941,7 @@ async def get_organic_stats(request: Request):
             for record in percentage_records:
                 uid_str = str(record[0])
                 verified_percentage = (
-                    (record[1] / record[2]) * 100 if record[2] > 0 else 100
+                    (record[1] / record[2]) * 100 if record[2] > 8 else 100
                 )
 
                 result[uid_str] = {
