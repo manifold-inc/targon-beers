@@ -56,7 +56,7 @@ async def ingest_mongo(request: Request):
     logger.info("Start POST /mongo")
     now = round(time.time() * 1000)
     request_id = generate(size=6)
-    
+
     try:
         body = await request.body()
         json_data = await request.json()
