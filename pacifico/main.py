@@ -3,6 +3,7 @@ from nanoid import generate
 import time
 from dotenv import load_dotenv
 import os
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from epistula import verify_signature
 import traceback
@@ -23,8 +24,38 @@ logger = setupLogging()
 
 subtensorEndpoint = os.getenv("SUBTENSOR_ENDPOINT")
 
-subtensor = bt.subtensor(subtensorEndpoint)
-metagraph = bt.metagraph(netuid=4, subtensor=subtensor)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def get_subtensor():
+    return bt.subtensor(subtensorEndpoint)
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def get_metagraph(subtensor):
+    return bt.metagraph(netuid=4, subtensor=subtensor)
+
+# Initialize global connections with retry logic
+try:
+    subtensor = get_subtensor()
+    metagraph = get_metagraph(subtensor)
+except Exception as e:
+    logger.error(f"Failed to connect to subtensor: {str(e)}")
+    raise
+
+# Function to refresh connections if needed
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def refresh_connections():
+    global subtensor, metagraph
+    subtensor = get_subtensor()
+    metagraph = get_metagraph(subtensor)
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def sync_metagraph():
+    global metagraph
+    try:
+        metagraph.sync()
+    except Exception as e:
+        logger.error(f"Failed to sync metagraph: {str(e)}")
+        refresh_connections()
+        metagraph.sync()
 
 username = os.getenv("MONGO_INITDB_ROOT_USERNAME", "admin")
 password = os.getenv("MONGO_INITDB_ROOT_PASSWORD", "password")
@@ -39,11 +70,11 @@ try:
     mongo_client.admin.command("ping")
     mongo_db = mongo_client.targon.uid_responses
 except Exception as e:
-    print(f"Failed to connect to MongoDB: {str(e)}")
+    logger.error(f"Failed to connect to MongoDB: {str(e)}")
     raise
 
 def is_authorized_hotkey(hotkey: str) -> bool:
-    metagraph.sync()
+    sync_metagraph()
     for uid in range(metagraph.n):
         if metagraph.validator_permit[uid]:
             if metagraph.hotkeys[uid] == hotkey:
