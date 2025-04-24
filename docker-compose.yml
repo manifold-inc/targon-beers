@@ -3,7 +3,7 @@ services:
     image: manifoldlabs/targon-pacifico
     labels:
       - traefik.enable=true
-      - traefik.http.routers.pacifico.rule=Host(`jugo.targon.com`) || Host(`beers.targon.com`)
+      - traefik.http.routers.pacifico.rule=Host(`beers.targon.com`)
       - traefik.http.routers.pacifico.tls=true
       - traefik.http.routers.pacifico.tls.certresolver=letsencrypt
       - traefik.http.services.pacifico.loadbalancer.server.port=80
@@ -25,15 +25,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.modelo
-    env_file: .env
-
-  corona:
-    image: manifoldlabs/targon-corona
-    labels:
-      - vector.enable=true
-    build:
-      context: .
-      dockerfile: Dockerfile.corona
     env_file: .env
 
   traefik:
