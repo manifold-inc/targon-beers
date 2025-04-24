@@ -1,6 +1,10 @@
-FROM python:3.9-slim
+FROM python:3.11.8-bookworm
 
 WORKDIR /app
+
+# Install Rust (required for Bittensor)
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 COPY ./pacifico/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
