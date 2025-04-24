@@ -2,6 +2,18 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
+# Install cron and other required dependencies
+RUN apt-get update && \
+    apt-get install -y cron tzdata curl sudo git build-essential cmake && \
+    ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Rust (required for Bittensor)
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 COPY ./pacifico/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
