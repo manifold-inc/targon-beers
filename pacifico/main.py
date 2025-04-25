@@ -3,7 +3,6 @@ from nanoid import generate
 import time
 from dotenv import load_dotenv
 import os
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from epistula import verify_signature
 import traceback
